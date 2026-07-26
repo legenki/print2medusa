@@ -1,0 +1,296 @@
+import {
+  createStep,
+  createWorkflow,
+  StepResponse,
+  transform,
+  WorkflowResponse,
+} from "@medusajs/framework/workflows-sdk"
+import {
+  batchProductVariantsWorkflow,
+  createProductsWorkflow,
+} from "@medusajs/medusa/core-flows"
+import { Modules } from "@medusajs/framework/utils"
+import { PRINTFUL_MODULE } from "../modules/printful"
+import type PrintfulModuleService from "../modules/printful/service"
+import { diffVariantsForUpsert, mapSyncProductToMedusa } from "../utils/mappers"
+
+export type SyncProductsInput = {
+  /** Optional limit for testing / partial sync */
+  limit?: number
+}
+
+type SyncCounters = {
+  created: number
+  updated: number
+  failed: number
+  errors: string[]
+}
+
+const createSyncLogStep = createStep(
+  "printful-create-sync-log",
+  async (_input: void, { container }) => {
+    const printful: PrintfulModuleService = container.resolve(PRINTFUL_MODULE)
+    const log = await printful.createPrintfulSyncLogs({
+      status: "running",
+      started_at: new Date(),
+      products_created: 0,
+      products_updated: 0,
+      products_failed: 0,
+    })
+    return new StepResponse(log)
+  }
+)
+
+const syncProductsStep = createStep(
+  "printful-sync-products",
+  async (input: SyncProductsInput, { container }) => {
+    const printful: PrintfulModuleService = container.resolve(PRINTFUL_MODULE)
+    const productModule = container.resolve(Modules.PRODUCT)
+    const client = await printful.getClient()
+    const options = await printful.getOptions()
+    const storeId = await printful.getStoreId()
+
+    const summaries = await client.listAllSyncProducts({
+      limit: 100,
+    })
+
+    const toProcess =
+      input.limit != null ? summaries.slice(0, input.limit) : summaries
+
+    const counters: SyncCounters = {
+      created: 0,
+      updated: 0,
+      failed: 0,
+      errors: [],
+    }
+
+    for (const summary of toProcess) {
+      if (summary.is_ignored) {
+        continue
+      }
+
+      try {
+        const detail = await client.getSyncProduct(summary.id)
+        if (!detail.sync_variants?.length) {
+          counters.failed += 1
+          counters.errors.push(`Product ${summary.id} has no variants`)
+          continue
+        }
+
+        const mapped = mapSyncProductToMedusa(detail, {
+          storeId: options.storeId,
+          defaultCurrency: options.defaultCurrency,
+          markupPercent: options.markupPercent,
+        })
+
+        const existingLink = await printful.findProductLink(String(summary.id))
+
+        if (existingLink?.medusa_product_id) {
+          const productId = existingLink.medusa_product_id
+
+          // Update core product fields.
+          await productModule.updateProducts(productId, {
+            title: mapped.title,
+            thumbnail: mapped.thumbnail,
+            metadata: mapped.metadata,
+            status: mapped.status,
+          })
+
+          // Upsert variants so price/assortment changes in Printful reach Medusa.
+          const product = await productModule.retrieveProduct(productId, {
+            relations: ["variants"],
+          })
+          const { toCreate, toUpdate } = diffVariantsForUpsert(
+            mapped.variants,
+            (product.variants ?? []).map((pv) => ({
+              id: pv.id,
+              metadata: pv.metadata,
+            }))
+          )
+
+          if (toUpdate.length) {
+            await batchProductVariantsWorkflow(container).run({
+              input: {
+                update: toUpdate.map((u) => ({
+                  id: u.id,
+                  title: u.title,
+                  prices: u.prices,
+                  metadata: u.metadata,
+                })),
+              },
+            })
+          }
+
+          if (toCreate.length) {
+            const { result: created } = await batchProductVariantsWorkflow(
+              container
+            ).run({
+              input: {
+                create: toCreate.map((c) => ({
+                  product_id: productId,
+                  title: c.title,
+                  sku: c.sku,
+                  options: c.options,
+                  prices: c.prices,
+                  metadata: c.metadata,
+                  manage_inventory: c.manage_inventory,
+                  allow_backorder: c.allow_backorder,
+                })),
+              },
+            })
+
+            for (const variant of created.created ?? []) {
+              const syncVariantId = variant.metadata?.printful_sync_variant_id
+              if (!syncVariantId) {
+                continue
+              }
+              await printful.createPrintfulVariantLinks({
+                printful_store_id: storeId,
+                printful_sync_product_id: String(summary.id),
+                printful_sync_variant_id: String(syncVariantId),
+                medusa_variant_id: variant.id,
+                last_synced_at: new Date(),
+              })
+            }
+          }
+
+          // Refresh timestamps on existing variant links.
+          for (const v of detail.sync_variants) {
+            const existingVariant = await printful.findVariantLink(String(v.id))
+            if (existingVariant) {
+              await printful.updatePrintfulVariantLinks({
+                id: existingVariant.id,
+                last_synced_at: new Date(),
+              })
+            }
+          }
+
+          await printful.updatePrintfulProductLinks({
+            id: existingLink.id,
+            last_synced_at: new Date(),
+          })
+          counters.updated += 1
+        } else {
+          // Ensure unique handle if collision
+          let handle = mapped.handle
+          try {
+            const existing = await productModule.listProducts(
+              { handle: [handle] },
+              { take: 1 }
+            )
+            if (existing.length) {
+              handle = `${handle}-pf-${summary.id}`
+            }
+          } catch {
+            // ignore lookup errors
+          }
+
+          const { result } = await createProductsWorkflow(container).run({
+            input: {
+              products: [
+                {
+                  title: mapped.title,
+                  handle,
+                  status: mapped.status,
+                  thumbnail: mapped.thumbnail,
+                  images: mapped.images,
+                  options: mapped.options,
+                  variants: mapped.variants.map((v) => ({
+                    title: v.title,
+                    sku: v.sku,
+                    options: v.options,
+                    prices: v.prices,
+                    metadata: v.metadata,
+                    manage_inventory: v.manage_inventory,
+                    allow_backorder: v.allow_backorder,
+                  })),
+                  metadata: mapped.metadata,
+                  external_id: mapped.external_id,
+                },
+              ],
+            },
+          })
+
+          const created = result[0]
+          await printful.createPrintfulProductLinks({
+            printful_store_id: storeId,
+            printful_sync_product_id: String(summary.id),
+            medusa_product_id: created.id,
+            last_synced_at: new Date(),
+          })
+
+          for (const variant of created.variants ?? []) {
+            const syncVariantId = variant.metadata?.printful_sync_variant_id
+            if (!syncVariantId) {
+              continue
+            }
+            await printful.createPrintfulVariantLinks({
+              printful_store_id: storeId,
+              printful_sync_product_id: String(summary.id),
+              printful_sync_variant_id: String(syncVariantId),
+              medusa_variant_id: variant.id,
+              last_synced_at: new Date(),
+            })
+          }
+
+          counters.created += 1
+        }
+      } catch (err) {
+        counters.failed += 1
+        const message = err instanceof Error ? err.message : String(err)
+        counters.errors.push(`Product ${summary.id}: ${message}`)
+      }
+    }
+
+    return new StepResponse(counters)
+  }
+)
+
+const finalizeSyncLogStep = createStep(
+  "printful-finalize-sync-log",
+  async (
+    input: { logId: string; counters: SyncCounters },
+    { container }
+  ) => {
+    const printful: PrintfulModuleService = container.resolve(PRINTFUL_MODULE)
+    const failedHard =
+      input.counters.failed > 0 &&
+      input.counters.created === 0 &&
+      input.counters.updated === 0
+
+    const log = await printful.updatePrintfulSyncLogs({
+      id: input.logId,
+      status: failedHard ? "failed" : "success",
+      finished_at: new Date(),
+      products_created: input.counters.created,
+      products_updated: input.counters.updated,
+      products_failed: input.counters.failed,
+      error_message:
+        input.counters.errors.length > 0
+          ? input.counters.errors.slice(0, 20).join("\n")
+          : null,
+    })
+
+    return new StepResponse(log)
+  }
+)
+
+export const syncProductsWorkflow = createWorkflow(
+  "printful-sync-products",
+  (input: SyncProductsInput) => {
+    const log = createSyncLogStep()
+    const counters = syncProductsStep(input)
+    const finalizeInput = transform({ log, counters }, (data) => ({
+      logId: data.log.id as string,
+      counters: data.counters as SyncCounters,
+    }))
+    const finalLog = finalizeSyncLogStep(finalizeInput)
+
+    return new WorkflowResponse({
+      sync_log: finalLog,
+      counters,
+    })
+  }
+)
+
+export default syncProductsWorkflow
