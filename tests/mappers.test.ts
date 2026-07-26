@@ -1,0 +1,162 @@
+import { describe, expect, it } from "vitest"
+import {
+  applyMarkup,
+  diffVariantsForUpsert,
+  mapSyncProductToMedusa,
+  parsePriceToMinorUnits,
+  resolveStateCode,
+  slugify,
+} from "../src/utils/mappers"
+import type { MedusaVariantInput } from "../src/utils/mappers"
+import type { PrintfulSyncProductDetail } from "../src/utils/types"
+
+const sample: PrintfulSyncProductDetail = {
+  sync_product: {
+    id: 100,
+    external_id: "ext-1",
+    name: "Cool Tee!",
+    variants: 2,
+    synced: 2,
+    thumbnail_url: "https://cdn.example/t.png",
+  },
+  sync_variants: [
+    {
+      id: 1001,
+      sync_product_id: 100,
+      name: "Cool Tee! - Black / M",
+      retail_price: "25.00",
+      currency: "USD",
+      size: "M",
+      color: "Black",
+      sku: "TEE-BLK-M",
+      files: [{ preview_url: "https://cdn.example/v1.png" }],
+    },
+    {
+      id: 1002,
+      sync_product_id: 100,
+      name: "Cool Tee! - Black / L",
+      retail_price: "25.50",
+      currency: "USD",
+      size: "L",
+      color: "Black",
+    },
+  ],
+}
+
+describe("mappers", () => {
+  it("slugifies titles", () => {
+    expect(slugify("Cool Tee!")).toBe("cool-tee")
+  })
+
+  it("parses prices to minor units", () => {
+    expect(parsePriceToMinorUnits("25.00")).toBe(2500)
+    expect(parsePriceToMinorUnits("25.5")).toBe(2550)
+    expect(parsePriceToMinorUnits(null)).toBe(0)
+  })
+
+  it("applies markup", () => {
+    expect(applyMarkup(1000, 30)).toBe(1300)
+    expect(applyMarkup(1000)).toBe(1000)
+  })
+
+  it("maps sync product to Medusa product input", () => {
+    const mapped = mapSyncProductToMedusa(sample, {
+      storeId: "42",
+      markupPercent: 0,
+    })
+
+    expect(mapped.title).toBe("Cool Tee!")
+    expect(mapped.handle).toBe("cool-tee")
+    expect(mapped.metadata.printful_sync_product_id).toBe("100")
+    expect(mapped.options.map((o) => o.title).sort()).toEqual(["Color", "Size"])
+    expect(mapped.variants).toHaveLength(2)
+    expect(mapped.variants[0].prices[0].amount).toBe(2500)
+    expect(mapped.variants[0].metadata.printful_sync_variant_id).toBe("1001")
+    expect(mapped.variants[0].options.Size).toBe("M")
+    expect(mapped.variants[0].options.Color).toBe("Black")
+    expect(mapped.images?.length).toBeGreaterThan(0)
+  })
+})
+
+describe("resolveStateCode", () => {
+  it("passes through valid 2-letter codes for known countries", () => {
+    expect(resolveStateCode("CA", "US")).toBe("CA")
+    expect(resolveStateCode("ny", "US")).toBe("NY")
+    expect(resolveStateCode("ON", "CA")).toBe("ON")
+  })
+
+  it("maps full US state names to their code", () => {
+    expect(resolveStateCode("California", "US")).toBe("CA")
+    expect(resolveStateCode("new york", "US")).toBe("NY")
+    expect(resolveStateCode("Puerto Rico", "US")).toBe("PR")
+  })
+
+  it("maps full Canadian province names to their code", () => {
+    expect(resolveStateCode("Ontario", "CA")).toBe("ON")
+    expect(resolveStateCode("british columbia", "CA")).toBe("BC")
+  })
+
+  it("returns undefined for empty or unresolvable input", () => {
+    expect(resolveStateCode(undefined, "US")).toBeUndefined()
+    expect(resolveStateCode("", "US")).toBeUndefined()
+    expect(resolveStateCode("Nowhere", "US")).toBeUndefined()
+  })
+
+  it("returns undefined for countries without a state table (raw dropped)", () => {
+    // Printful only requires state_code for US/CA/AU; unknown countries omit it
+    expect(resolveStateCode("Bavaria", "DE")).toBeUndefined()
+  })
+})
+
+describe("diffVariantsForUpsert", () => {
+  const mapped: MedusaVariantInput[] = [
+    {
+      title: "Tee - M",
+      sku: "TEE-M",
+      options: { Size: "M" },
+      prices: [{ amount: 2600, currency_code: "usd" }],
+      metadata: { printful_sync_variant_id: "1001" },
+    },
+    {
+      title: "Tee - L",
+      sku: "TEE-L",
+      options: { Size: "L" },
+      prices: [{ amount: 2700, currency_code: "usd" }],
+      metadata: { printful_sync_variant_id: "1002" },
+    },
+  ]
+
+  it("matches existing variants by printful_sync_variant_id and updates price", () => {
+    const existing = [
+      {
+        id: "var_1",
+        metadata: { printful_sync_variant_id: "1001" },
+        prices: [{ amount: 2500, currency_code: "usd" }],
+      },
+    ]
+
+    const { toCreate, toUpdate } = diffVariantsForUpsert(mapped, existing)
+
+    // 1001 exists → update; 1002 is new → create
+    expect(toUpdate).toHaveLength(1)
+    expect(toUpdate[0].id).toBe("var_1")
+    expect(toUpdate[0].prices[0].amount).toBe(2600)
+    expect(toCreate).toHaveLength(1)
+    expect(toCreate[0].metadata.printful_sync_variant_id).toBe("1002")
+  })
+
+  it("creates all when there are no existing variants", () => {
+    const { toCreate, toUpdate } = diffVariantsForUpsert(mapped, [])
+    expect(toCreate).toHaveLength(2)
+    expect(toUpdate).toHaveLength(0)
+  })
+
+  it("does not match existing variants lacking a sync id", () => {
+    const existing = [
+      { id: "var_x", metadata: {}, prices: [] },
+    ]
+    const { toCreate, toUpdate } = diffVariantsForUpsert(mapped, existing)
+    expect(toUpdate).toHaveLength(0)
+    expect(toCreate).toHaveLength(2)
+  })
+})
