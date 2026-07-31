@@ -113,6 +113,12 @@ In a host Medusa app:
 npx medusa plugin:add @legenki/print2medusa
 ```
 
+## Roadmap
+
+See [ROADMAP.md](./ROADMAP.md) for the planned path from `0.2.0` (webhooks and
+order status) through `1.0.0` (stable API and Printful v2 migration), including
+the testing strategy for each release.
+
 ## Architecture notes
 
 - **Printful is source of truth** for products; Medusa holds a copy + links.
