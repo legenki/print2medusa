@@ -64,7 +64,20 @@ export function extractShipmentId(
   payload: PrintfulWebhookPayload
 ): string | null {
   const shipment = payload.data?.shipment as { id?: number | string } | undefined
-  return shipment?.id != null ? String(shipment.id) : null
+  if (shipment?.id == null || shipment.id === "") {
+    return null
+  }
+  return String(shipment.id)
+}
+
+/**
+ * Fingerprint only the stable content of an event. Printful's delivery envelope
+ * (`retries`, `store`) changes between redeliveries of the SAME event, so it
+ * must never reach the hash — otherwise a redelivered event derives a new id,
+ * defeats the unique index, and produces a duplicate fulfillment.
+ */
+function stableFingerprint(payload: PrintfulWebhookPayload): string {
+  return payloadFingerprint({ type: payload.type, data: payload.data })
 }
 
 /**
@@ -81,21 +94,21 @@ export function deriveEventId(payload: PrintfulWebhookPayload): string {
   switch (type) {
     case "package_shipped":
     case "package_returned":
-      discriminator = extractShipmentId(payload) ?? payloadFingerprint(payload)
+      discriminator = extractShipmentId(payload) ?? stableFingerprint(payload)
       break
     case "order_updated":
-      discriminator = order?.updated != null ? String(order.updated) : payloadFingerprint(payload)
+      discriminator = order?.updated != null ? String(order.updated) : stableFingerprint(payload)
       break
     case "order_failed":
     case "order_canceled":
       discriminator = ""
       break
     default:
-      discriminator = payloadFingerprint(payload)
+      discriminator = stableFingerprint(payload)
   }
 
   const timeKey =
-    payload.created != null ? String(payload.created) : payloadFingerprint(payload)
+    payload.created != null ? String(payload.created) : stableFingerprint(payload)
 
   return createHash("sha256")
     .update(`${type}|${orderId}|${discriminator}|${timeKey}`)
