@@ -9,7 +9,13 @@ import PrintfulWebhookEvent from "./models/printful-webhook-event"
 
 type InjectedDependencies = Record<string, unknown>
 
-/** Sentinel stored in a placeholder link before the Printful order exists. */
+/**
+ * Sentinel stored in a placeholder link before the Printful order exists.
+ *
+ * Migration20260731000000 excludes this exact value from the unique index on
+ * printful_order_id. Changing it without updating that migration reintroduces
+ * the concurrent-claim race; tests/order-link.test.ts guards the pairing.
+ */
 export const PENDING_PRINTFUL_ORDER_ID = "pending"
 
 /**

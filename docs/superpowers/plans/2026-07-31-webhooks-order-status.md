@@ -802,7 +802,7 @@ Add to `PrintfulModuleService`, after `findOrderLink`:
     return event ?? null
   }
 
-  /** Events due for another processing attempt, oldest first. */
+  /** Events due for another processing attempt, most overdue first. */
   async listDueWebhookEvents(limit = 50) {
     return this.listPrintfulWebhookEvents(
       {
@@ -810,7 +810,10 @@ Add to `PrintfulModuleService`, after `findOrderLink`:
         next_retry_at: { $lte: new Date() },
         attempts: { $lt: MAX_WEBHOOK_ATTEMPTS },
       },
-      { take: limit, order: { created_at: "ASC" } }
+      // Most overdue first. Ordering by next_retry_at (not created_at) lets the
+      // ("status", "next_retry_at") index satisfy the sort instead of paying an
+      // explicit Sort node on every sweep.
+      { take: limit, order: { next_retry_at: "ASC" } }
     )
   }
 
