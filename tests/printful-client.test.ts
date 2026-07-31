@@ -239,4 +239,35 @@ describe("PrintfulClient", () => {
     const [, init] = fetchImpl.mock.calls[0]
     expect((init.headers as Record<string, string>)["X-PF-Store-Id"]).toBe("42")
   })
+
+  it("returns an empty config when the store has no webhook set", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ code: 200, result: null }))
+    const client = new PrintfulClient({
+      apiToken: "token",
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      maxRetries: 0,
+    })
+
+    const config = await client.getWebhookConfig()
+
+    expect(config).toEqual({ url: null, types: [] })
+    expect(config.types).toHaveLength(0)
+  })
+
+  it("returns an empty config when disabling yields a null result", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ code: 200, result: null }))
+    const client = new PrintfulClient({
+      apiToken: "token",
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      maxRetries: 0,
+    })
+
+    const config = await client.disableWebhook()
+
+    expect(config).toEqual({ url: null, types: [] })
+  })
 })

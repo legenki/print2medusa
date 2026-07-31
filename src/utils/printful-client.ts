@@ -8,6 +8,7 @@ import type {
   PrintfulSyncProductSummary,
   PrintfulWebhookConfig,
 } from "./types"
+import { PRINTFUL_WEBHOOK_TYPES } from "./webhook-events"
 
 export type PrintfulClientOptions = {
   apiToken: string
@@ -131,7 +132,7 @@ export class PrintfulClient {
 
   async getWebhookConfig(): Promise<PrintfulWebhookConfig> {
     const data = await this.request<PrintfulWebhookConfig>("/webhooks")
-    return data.result
+    return data.result ?? { url: null, types: [] }
   }
 
   /**
@@ -141,7 +142,7 @@ export class PrintfulClient {
    */
   async setWebhookConfig(
     url: string,
-    types: string[]
+    types: ReadonlyArray<(typeof PRINTFUL_WEBHOOK_TYPES)[number]>
   ): Promise<PrintfulWebhookConfig> {
     const data = await this.request<PrintfulWebhookConfig>("/webhooks", {
       method: "POST",
@@ -154,7 +155,7 @@ export class PrintfulClient {
     const data = await this.request<PrintfulWebhookConfig>("/webhooks", {
       method: "DELETE",
     })
-    return data.result
+    return data.result ?? { url: null, types: [] }
   }
 
   private async request<T>(
