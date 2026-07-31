@@ -9,6 +9,9 @@ export function verifyWebhookToken(
   configured: string | null | undefined,
   provided: string | null | undefined
 ): boolean {
+  if (typeof configured !== "string" || typeof provided !== "string") {
+    return false
+  }
   if (!configured || !provided) {
     return false
   }

@@ -24,4 +24,11 @@ describe("verifyWebhookToken", () => {
     expect(verifyWebhookToken("s3cret", undefined)).toBe(false)
     expect(verifyWebhookToken("s3cret", "")).toBe(false)
   })
+
+  it("rejects non-string input instead of throwing", () => {
+    expect(verifyWebhookToken("s3cret", ["s3cret"] as unknown as string)).toBe(false)
+    expect(verifyWebhookToken("s3cret", 123 as unknown as string)).toBe(false)
+    expect(verifyWebhookToken("s3cret", {} as unknown as string)).toBe(false)
+    expect(verifyWebhookToken(42 as unknown as string, "s3cret")).toBe(false)
+  })
 })
