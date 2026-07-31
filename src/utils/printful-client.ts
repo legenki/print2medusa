@@ -6,6 +6,7 @@ import type {
   PrintfulOrder,
   PrintfulSyncProductDetail,
   PrintfulSyncProductSummary,
+  PrintfulWebhookConfig,
 } from "./types"
 
 export type PrintfulClientOptions = {
@@ -123,6 +124,34 @@ export class PrintfulClient {
 
   async cancelOrder(id: number | string): Promise<PrintfulOrder> {
     const data = await this.request<PrintfulOrder>(`/orders/${id}`, {
+      method: "DELETE",
+    })
+    return data.result
+  }
+
+  async getWebhookConfig(): Promise<PrintfulWebhookConfig> {
+    const data = await this.request<PrintfulWebhookConfig>("/webhooks")
+    return data.result
+  }
+
+  /**
+   * Printful v1 keeps a single webhook configuration per store, so this
+   * replaces the URL and the entire type list. Always pass the full allowlist —
+   * a partial list silently drops the types you omit.
+   */
+  async setWebhookConfig(
+    url: string,
+    types: string[]
+  ): Promise<PrintfulWebhookConfig> {
+    const data = await this.request<PrintfulWebhookConfig>("/webhooks", {
+      method: "POST",
+      body: JSON.stringify({ url, types }),
+    })
+    return data.result
+  }
+
+  async disableWebhook(): Promise<PrintfulWebhookConfig> {
+    const data = await this.request<PrintfulWebhookConfig>("/webhooks", {
       method: "DELETE",
     })
     return data.result

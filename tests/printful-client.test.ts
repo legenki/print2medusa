@@ -168,4 +168,75 @@ describe("PrintfulClient", () => {
     await expect(client.getOrder(1)).rejects.toBeInstanceOf(PrintfulApiError)
     expect(fetchImpl).toHaveBeenCalledTimes(1)
   })
+
+  it("reads the webhook config", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      jsonResponse({
+        code: 200,
+        result: { url: "https://shop.test/hooks/printful/tok", types: ["package_shipped"] },
+      })
+    )
+    const client = new PrintfulClient({
+      apiToken: "token",
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      maxRetries: 0,
+    })
+
+    const config = await client.getWebhookConfig()
+
+    expect(config.url).toBe("https://shop.test/hooks/printful/tok")
+    expect(config.types).toEqual(["package_shipped"])
+    expect(String(fetchImpl.mock.calls[0][0])).toContain("/webhooks")
+  })
+
+  it("replaces the whole webhook config on set", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      jsonResponse({ code: 200, result: { url: "https://shop.test/h", types: ["order_failed"] } })
+    )
+    const client = new PrintfulClient({
+      apiToken: "token",
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      maxRetries: 0,
+    })
+
+    await client.setWebhookConfig("https://shop.test/h", ["order_failed"])
+
+    const [, init] = fetchImpl.mock.calls[0]
+    expect(init.method).toBe("POST")
+    const body = JSON.parse(init.body as string)
+    expect(body.url).toBe("https://shop.test/h")
+    expect(body.types).toEqual(["order_failed"])
+  })
+
+  it("disables the webhook config", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ code: 200, result: { url: null, types: [] } }))
+    const client = new PrintfulClient({
+      apiToken: "token",
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      maxRetries: 0,
+    })
+
+    await client.disableWebhook()
+
+    expect(fetchImpl.mock.calls[0][1].method).toBe("DELETE")
+  })
+
+  it("sends the store header on webhook config calls", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      jsonResponse({ code: 200, result: { url: null, types: [] } })
+    )
+    const client = new PrintfulClient({
+      apiToken: "token",
+      storeId: "42",
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      maxRetries: 0,
+    })
+
+    await client.getWebhookConfig()
+
+    const [, init] = fetchImpl.mock.calls[0]
+    expect((init.headers as Record<string, string>)["X-PF-Store-Id"]).toBe("42")
+  })
 })

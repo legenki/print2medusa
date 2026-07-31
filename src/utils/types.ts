@@ -134,3 +134,9 @@ export type ListSyncProductsParams = {
   limit?: number
   status?: string
 }
+
+export type PrintfulWebhookConfig = {
+  url: string | null
+  types: string[]
+  params?: Record<string, unknown>
+}
