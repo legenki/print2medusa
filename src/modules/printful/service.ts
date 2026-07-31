@@ -1,4 +1,5 @@
 import { MedusaService } from "@medusajs/framework/utils"
+import { createHash } from "crypto"
 import { PrintfulClient } from "../../utils/printful-client"
 import type { PrintfulPluginOptions } from "../../utils/types"
 import PrintfulOrderLink from "./models/printful-order-link"
@@ -10,6 +11,22 @@ import PrintfulWebhookEvent from "./models/printful-webhook-event"
 type InjectedDependencies = Record<string, unknown>
 
 /**
+ * Minimal shape of MikroORM's SqlEntityManager that we depend on.
+ *
+ * `baseRepository_` is assigned by MedusaService's constructor from
+ * `container.baseRepository` (see @medusajs/utils AbstractModuleService_), but
+ * it is not part of the factory's declared return type, so a subclass has to
+ * redeclare it to reach `getActiveManager()`.
+ */
+type SqlLikeManager = {
+  execute<T = unknown>(query: string, params?: unknown[]): Promise<T>
+}
+
+type BaseRepositoryLike = {
+  getActiveManager<TManager = unknown>(): TManager
+}
+
+/**
  * Sentinel stored in a placeholder link before the Printful order exists.
  *
  * Migration20260731000000 excludes this exact value from the unique index on
@@ -17,6 +34,28 @@ type InjectedDependencies = Record<string, unknown>
  * the concurrent-claim race; tests/order-link.test.ts guards the pairing.
  */
 export const PENDING_PRINTFUL_ORDER_ID = "pending"
+
+/** Attempts before an event is parked as permanently failed. */
+export const MAX_WEBHOOK_ATTEMPTS = 20
+
+/** Backoff: 5 minutes doubling per attempt, capped at 6 hours. */
+export function nextRetryDelayMs(attempts: number): number {
+  const FIVE_MINUTES = 5 * 60 * 1000
+  const SIX_HOURS = 6 * 60 * 60 * 1000
+  return Math.min(FIVE_MINUTES * Math.pow(2, attempts), SIX_HOURS)
+}
+
+/**
+ * Stable 32-bit key for pg_advisory_lock, derived from the order id.
+ *
+ * readInt32BE yields a signed 32-bit integer, which is exactly the width
+ * pg_advisory_lock's single-argument form takes. The order id itself never
+ * reaches SQL — only this number does, and it is passed as a bind parameter.
+ */
+export function lockKeyFor(printfulOrderId: string): number {
+  const digest = createHash("sha256").update(String(printfulOrderId)).digest()
+  return digest.readInt32BE(0)
+}
 
 /**
  * Detect a Postgres unique-constraint violation (SQLSTATE 23505) regardless of
@@ -49,6 +88,8 @@ class PrintfulModuleService extends MedusaService({
 }) {
   protected options_: PrintfulPluginOptions
   protected client_: PrintfulClient | null = null
+  /** Injected by MedusaService's constructor; see BaseRepositoryLike above. */
+  protected declare baseRepository_: BaseRepositoryLike
 
   constructor(container: InjectedDependencies, options?: PrintfulPluginOptions) {
     // MedusaService multi-arg constructor
@@ -109,6 +150,89 @@ class PrintfulModuleService extends MedusaService({
       medusa_order_id: medusaOrderId,
     })
     return link ?? null
+  }
+
+  /** Reverse lookup used by webhooks, which only know the Printful order id. */
+  async findOrderLinkByPrintfulId(printfulOrderId: string) {
+    const [link] = await this.listPrintfulOrderLinks({
+      printful_order_id: String(printfulOrderId),
+    })
+    return link ?? null
+  }
+
+  /**
+   * Store an inbound event. Returns null when the event_id already exists,
+   * which is how redelivered webhooks are absorbed.
+   */
+  async recordWebhookEvent(input: {
+    event_id: string
+    type: string
+    printful_order_id: string
+    printful_shipment_id?: string | null
+    payload: Record<string, unknown>
+    status?: string
+  }) {
+    try {
+      return await this.createPrintfulWebhookEvents({
+        event_id: input.event_id,
+        type: input.type,
+        printful_order_id: input.printful_order_id,
+        printful_shipment_id: input.printful_shipment_id ?? null,
+        payload: input.payload,
+        status: input.status ?? "received",
+        attempts: 0,
+        next_retry_at: new Date(),
+      })
+    } catch (err) {
+      if (isUniqueViolation(err)) {
+        return null
+      }
+      throw err
+    }
+  }
+
+  async findWebhookEvent(eventId: string) {
+    const [event] = await this.listPrintfulWebhookEvents({ event_id: eventId })
+    return event ?? null
+  }
+
+  /**
+   * Events due for another processing attempt, most overdue first. Ordering by
+   * next_retry_at (not created_at) lets the ("status", "next_retry_at") index
+   * satisfy the sort instead of paying an explicit Sort node on every sweep.
+   */
+  async listDueWebhookEvents(limit = 50) {
+    return this.listPrintfulWebhookEvents(
+      {
+        status: ["received", "deferred"],
+        next_retry_at: { $lte: new Date() },
+        attempts: { $lt: MAX_WEBHOOK_ATTEMPTS },
+      },
+      { take: limit, order: { next_retry_at: "ASC" } }
+    )
+  }
+
+  /**
+   * Serialize work per Printful order. Two events for one order must not be
+   * applied concurrently: both could pass the "shipment already recorded"
+   * check before either writes, producing two fulfillments for one parcel.
+   * Different orders remain parallel.
+   *
+   * The lock is session-scoped (pg_advisory_lock, not the _xact_ variant), so
+   * the unlock in `finally` is what releases it — including on the throw path.
+   */
+  async withOrderLock<T>(
+    printfulOrderId: string,
+    fn: () => Promise<T>
+  ): Promise<T> {
+    const key = lockKeyFor(printfulOrderId)
+    const manager = this.baseRepository_.getActiveManager<SqlLikeManager>()
+    await manager.execute("select pg_advisory_lock(?)", [key])
+    try {
+      return await fn()
+    } finally {
+      await manager.execute("select pg_advisory_unlock(?)", [key])
+    }
   }
 
   /**

@@ -3,6 +3,9 @@ import { join } from "path"
 import { describe, expect, it } from "vitest"
 import {
   isUniqueViolation,
+  lockKeyFor,
+  MAX_WEBHOOK_ATTEMPTS,
+  nextRetryDelayMs,
   PENDING_PRINTFUL_ORDER_ID,
 } from "../src/modules/printful/service"
 
@@ -62,5 +65,56 @@ describe("sentinel coupling between service and migration", () => {
     expect(migration).toContain(
       `"printful_order_id" <> '${PENDING_PRINTFUL_ORDER_ID}'`
     )
+  })
+})
+
+describe("nextRetryDelayMs", () => {
+  it("starts at five minutes", () => {
+    expect(nextRetryDelayMs(0)).toBe(5 * 60 * 1000)
+  })
+
+  it("doubles per attempt", () => {
+    expect(nextRetryDelayMs(1)).toBe(10 * 60 * 1000)
+    expect(nextRetryDelayMs(2)).toBe(20 * 60 * 1000)
+  })
+
+  it("caps at six hours", () => {
+    expect(nextRetryDelayMs(20)).toBe(6 * 60 * 60 * 1000)
+    expect(nextRetryDelayMs(100)).toBe(6 * 60 * 60 * 1000)
+  })
+
+  it("never returns a negative or zero delay", () => {
+    for (const attempt of [0, 1, 5, 50, 1000]) {
+      expect(nextRetryDelayMs(attempt)).toBeGreaterThan(0)
+    }
+  })
+})
+
+describe("lockKeyFor", () => {
+  it("is stable for the same order id", () => {
+    expect(lockKeyFor("777")).toBe(lockKeyFor("777"))
+  })
+
+  it("differs across order ids", () => {
+    expect(lockKeyFor("777")).not.toBe(lockKeyFor("778"))
+  })
+
+  it("fits in a 32-bit signed integer", () => {
+    for (const id of ["1", "some-order", "999999999999", ""]) {
+      const key = lockKeyFor(id)
+      expect(Number.isInteger(key)).toBe(true)
+      expect(key).toBeGreaterThanOrEqual(-(2 ** 31))
+      expect(key).toBeLessThan(2 ** 31)
+    }
+  })
+
+  it("treats numeric and string forms of an id alike", () => {
+    expect(lockKeyFor("42")).toBe(lockKeyFor(42 as unknown as string))
+  })
+})
+
+describe("MAX_WEBHOOK_ATTEMPTS", () => {
+  it("caps retries at twenty", () => {
+    expect(MAX_WEBHOOK_ATTEMPTS).toBe(20)
   })
 })
