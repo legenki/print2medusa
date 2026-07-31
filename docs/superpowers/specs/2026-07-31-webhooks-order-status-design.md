@@ -107,9 +107,16 @@ Where `discriminator` is per event type:
 | `order_failed` / `order_canceled` | `""` (empty) | Terminal and non-repeating per order |
 | unknown types | `payload_fingerprint` | Safe default |
 
-`payload_fingerprint` is `sha256` of the canonicalized payload (keys sorted), used
-whenever the preferred field is absent. The raw payload is stored regardless, so a
-wrong derivation can be diagnosed and reprocessed later.
+`payload_fingerprint` is `sha256` of the canonicalized **content** (keys sorted),
+used whenever the preferred field is absent. The raw payload is stored regardless,
+so a wrong derivation can be diagnosed and reprocessed later.
+
+**The fingerprint must cover `{ type, data }` only — never the raw payload.**
+Printful's delivery envelope carries `retries`, which increments on each
+redelivery of the same event. Hashing it would give a redelivered event a new
+`event_id`, bypass the unique index, and create a duplicate fulfillment — the
+exact failure this mechanism exists to prevent. `store` is excluded for the same
+reason.
 
 ## Data model
 
