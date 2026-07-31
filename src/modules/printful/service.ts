@@ -5,6 +5,7 @@ import PrintfulOrderLink from "./models/printful-order-link"
 import PrintfulProductLink from "./models/printful-product-link"
 import PrintfulSyncLog from "./models/printful-sync-log"
 import PrintfulVariantLink from "./models/printful-variant-link"
+import PrintfulWebhookEvent from "./models/printful-webhook-event"
 
 type InjectedDependencies = Record<string, unknown>
 
@@ -38,6 +39,7 @@ class PrintfulModuleService extends MedusaService({
   PrintfulVariantLink,
   PrintfulSyncLog,
   PrintfulOrderLink,
+  PrintfulWebhookEvent,
 }) {
   protected options_: PrintfulPluginOptions
   protected client_: PrintfulClient | null = null
