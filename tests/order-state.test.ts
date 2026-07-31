@@ -36,6 +36,11 @@ describe("planOrderStateActions", () => {
     }
     const plan = planOrderStateActions(order, ["1"])
     expect(plan.shipments.map((s) => s.printful_shipment_id)).toEqual(["2"])
+    // Metadata keeps the full history — the admin widget renders every parcel,
+    // not just the ones we have yet to record.
+    expect(
+      (plan.metadata.printful_shipments as Array<{ id: string }>).map((s) => s.id)
+    ).toEqual(["1", "2"])
   })
 
   it("plans nothing when every shipment is recorded", () => {

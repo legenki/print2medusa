@@ -20,7 +20,9 @@ const ATTENTION_STATES = new Set(["failed", "canceled", "onhold"])
 
 /**
  * Decide what should happen for a Printful order, given which shipments Medusa
- * has already recorded. Pure: performs nothing, returns intent.
+ * has already recorded. Performs nothing — returns intent. The decision logic
+ * is deterministic; only the `printful_status_updated_at` breadcrumb reads the
+ * clock.
  *
  * The caller passes the order fetched from GET /orders/{id} — never the webhook
  * payload, which is untrusted.
