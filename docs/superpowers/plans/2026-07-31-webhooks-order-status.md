@@ -826,13 +826,17 @@ Add to `PrintfulModuleService`, after `findOrderLink`:
     printfulOrderId: string,
     fn: () => Promise<T>
   ): Promise<T> {
+    // NOTE: the manager lives on the repository as getActiveManager() — there
+    // is no getActiveManager_() on MedusaService in Medusa v2.18. Hold ONE
+    // manager reference across lock and unlock: pg_advisory_lock is
+    // session-scoped, so both statements must reach the same connection.
     const key = lockKeyFor(printfulOrderId)
-    const manager = this.getActiveManager_()
-    await manager.execute(`select pg_advisory_lock(${key})`)
+    const manager = this.baseRepository_.getActiveManager<SqlLikeManager>()
+    await manager.execute("select pg_advisory_lock(?)", [key])
     try {
       return await fn()
     } finally {
-      await manager.execute(`select pg_advisory_unlock(${key})`)
+      await manager.execute("select pg_advisory_unlock(?)", [key])
     }
   }
 ```
