@@ -1,8 +1,12 @@
 # @legenki/print2medusa
 
+[![npm version](https://img.shields.io/npm/v/@legenki/print2medusa.svg)](https://www.npmjs.com/package/@legenki/print2medusa)
+[![npm downloads](https://img.shields.io/npm/dm/@legenki/print2medusa.svg)](https://www.npmjs.com/package/@legenki/print2medusa)
+[![license](https://img.shields.io/npm/l/@legenki/print2medusa.svg)](./LICENSE)
+
 Printful → Medusa v2 plugin: **sync Store Products**, **auto-create Printful orders** on payment capture, and a **Fulfillment Provider** for admin shipping options.
 
-MIT licensed.
+Published on npm as [`@legenki/print2medusa`](https://www.npmjs.com/package/@legenki/print2medusa). MIT licensed.
 
 ## Requirements
 
@@ -14,6 +18,12 @@ MIT licensed.
 
 ```bash
 npm install @legenki/print2medusa
+```
+
+Or add it to a Medusa app the plugin-native way:
+
+```bash
+npx medusa plugin:add @legenki/print2medusa
 ```
 
 Register the plugin and fulfillment provider in `medusa-config.ts`:
