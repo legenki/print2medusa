@@ -181,6 +181,20 @@ Postgres advisory lock keyed on a hash of `printful_order_id`, held for the
 duration of the step. Events for different orders stay parallel; events for the
 same order queue behind each other.
 
+**It must be `pg_advisory_xact_lock` inside a transaction — never the
+session-scoped `pg_advisory_lock`.** Medusa's `getActiveManager()` forks without
+a transaction context, so knex checks out a fresh pool connection per statement.
+A session lock and its unlock can therefore land on different connections: the
+unlock silently returns `false` and the lock leaks for the life of the pooled
+connection, blocking every later event for that order. Verified against Postgres
+16 during implementation — four of five concurrent unlocks leaked. The
+transaction-scoped variant pins all statements to one connection and is released
+by Postgres on commit or rollback, so no unlock call exists to go wrong.
+
+The 32-bit key space means unrelated orders occasionally collide (~2 per 200k
+ids). A collision only serializes two unrelated orders, which is slower but never
+incorrect.
+
 ## Applying state
 
 The apply workflow reads `GET /orders/{id}` and decides from `status` and

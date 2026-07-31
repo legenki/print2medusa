@@ -826,18 +826,20 @@ Add to `PrintfulModuleService`, after `findOrderLink`:
     printfulOrderId: string,
     fn: () => Promise<T>
   ): Promise<T> {
-    // NOTE: the manager lives on the repository as getActiveManager() — there
-    // is no getActiveManager_() on MedusaService in Medusa v2.18. Hold ONE
-    // manager reference across lock and unlock: pg_advisory_lock is
-    // session-scoped, so both statements must reach the same connection.
+    // Transaction-scoped, deliberately. getActiveManager() forks without a
+    // transaction context, so knex takes a fresh pool connection per statement
+    // and a session-scoped unlock can land on a different connection than its
+    // lock — leaking the lock for the life of that connection. Verified against
+    // Postgres 16: four of five concurrent unlocks leaked. The xact variant
+    // pins statements to one connection and Postgres releases it on commit or
+    // rollback, so there is no unlock call left to fail.
     const key = lockKeyFor(printfulOrderId)
-    const manager = this.baseRepository_.getActiveManager<SqlLikeManager>()
-    await manager.execute("select pg_advisory_lock(?)", [key])
-    try {
-      return await fn()
-    } finally {
-      await manager.execute("select pg_advisory_unlock(?)", [key])
-    }
+    return this.baseRepository_.transaction(
+      async (txManager: SqlLikeManager) => {
+        await txManager.execute("select pg_advisory_xact_lock(?)", [key])
+        return await fn()
+      }
+    )
   }
 ```
 
