@@ -2,7 +2,7 @@ import { model } from "@medusajs/framework/utils"
 
 const PrintfulWebhookEvent = model.define("printful_webhook_event", {
   id: model.id().primaryKey(),
-  event_id: model.text(),
+  event_id: model.text().unique(),
   type: model.text(),
   printful_order_id: model.text(),
   printful_shipment_id: model.text().nullable(),

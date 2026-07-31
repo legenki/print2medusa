@@ -23,7 +23,14 @@ type SqlLikeManager = {
 }
 
 type BaseRepositoryLike = {
-  getActiveManager<TManager = unknown>(): TManager
+  getActiveManager<TManager = unknown>(context?: {
+    transactionManager?: unknown
+    manager?: unknown
+  }): TManager
+  transaction<T>(
+    task: (manager: SqlLikeManager) => Promise<T>,
+    options?: unknown
+  ): Promise<T>
 }
 
 /**
@@ -46,11 +53,15 @@ export function nextRetryDelayMs(attempts: number): number {
 }
 
 /**
- * Stable 32-bit key for pg_advisory_lock, derived from the order id.
+ * Stable 32-bit key for pg_advisory_xact_lock, derived from the order id.
  *
  * readInt32BE yields a signed 32-bit integer, which is exactly the width
- * pg_advisory_lock's single-argument form takes. The order id itself never
+ * pg_advisory_xact_lock's single-argument form takes. The order id itself never
  * reaches SQL — only this number does, and it is passed as a bind parameter.
+ *
+ * 32 bits means distinct orders can collide (~2 per 200k ids). A collision
+ * only serializes two unrelated orders against each other, which is slower
+ * but never incorrect, so the simpler single-argument lock form is worth it.
  */
 export function lockKeyFor(printfulOrderId: string): number {
   const digest = createHash("sha256").update(String(printfulOrderId)).digest()
@@ -218,21 +229,23 @@ class PrintfulModuleService extends MedusaService({
    * check before either writes, producing two fulfillments for one parcel.
    * Different orders remain parallel.
    *
-   * The lock is session-scoped (pg_advisory_lock, not the _xact_ variant), so
-   * the unlock in `finally` is what releases it — including on the throw path.
+   * Uses the transaction-scoped lock deliberately. The session-scoped variant
+   * cannot work here: getActiveManager() forks without a transaction context,
+   * so knex takes a fresh pool connection per statement and the unlock can land
+   * on a different connection than the lock — leaking the lock permanently.
+   * pg_advisory_xact_lock is released by Postgres on commit or rollback.
    */
   async withOrderLock<T>(
     printfulOrderId: string,
     fn: () => Promise<T>
   ): Promise<T> {
     const key = lockKeyFor(printfulOrderId)
-    const manager = this.baseRepository_.getActiveManager<SqlLikeManager>()
-    await manager.execute("select pg_advisory_lock(?)", [key])
-    try {
-      return await fn()
-    } finally {
-      await manager.execute("select pg_advisory_unlock(?)", [key])
-    }
+    return this.baseRepository_.transaction(
+      async (txManager: SqlLikeManager) => {
+        await txManager.execute("select pg_advisory_xact_lock(?)", [key])
+        return await fn()
+      }
+    )
   }
 
   /**
