@@ -135,6 +135,26 @@ describe("deriveEventId", () => {
     expect(extractShipmentId(withEmpty)).toBeNull()
   })
 
+  it("rejects a payload nested past the depth limit instead of overflowing", () => {
+    let deep: Record<string, unknown> = { v: 1 }
+    for (let i = 0; i < 5000; i++) {
+      deep = { n: deep }
+    }
+    expect(() =>
+      deriveEventId({ type: "x", created: 1, data: { order: { id: 1 }, deep } })
+    ).toThrow(/too deeply nested/i)
+  })
+
+  it("accepts ordinary nesting well within the limit", () => {
+    let ok: Record<string, unknown> = { v: 1 }
+    for (let i = 0; i < 50; i++) {
+      ok = { n: ok }
+    }
+    expect(() =>
+      deriveEventId({ type: "x", created: 1, data: { order: { id: 1 }, ok } })
+    ).not.toThrow()
+  })
+
   it("excludes order_updated from the registered allowlist", () => {
     expect(PRINTFUL_WEBHOOK_TYPES).not.toContain("order_updated")
     expect(PRINTFUL_WEBHOOK_TYPES).toHaveLength(4)

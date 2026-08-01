@@ -36,18 +36,33 @@ export type PrintfulWebhookPayload = {
   data?: Record<string, unknown>
 }
 
+/**
+ * Nesting limit for canonicalize. Real Printful payloads are a handful of
+ * levels deep; 100 is generous headroom without being unbounded. Without this,
+ * a hostile or malformed payload (~5000 levels, well under body-parser's
+ * default 100KB limit) blows the call stack before verifyWebhookToken even
+ * gets a say for a value nested this deep — this guard runs post-auth, on the
+ * derive-event-id path only.
+ */
+const MAX_CANONICALIZE_DEPTH = 100
+
 /** Deterministic JSON with sorted keys, so key order cannot change the hash. */
-function canonicalize(value: unknown): string {
+function canonicalize(value: unknown, depth = 0): string {
+  if (depth > MAX_CANONICALIZE_DEPTH) {
+    throw new Error(
+      `Payload is too deeply nested (limit ${MAX_CANONICALIZE_DEPTH})`
+    )
+  }
   if (value === null || typeof value !== "object") {
     return JSON.stringify(value) ?? "null"
   }
   if (Array.isArray(value)) {
-    return `[${value.map(canonicalize).join(",")}]`
+    return `[${value.map((v) => canonicalize(v, depth + 1)).join(",")}]`
   }
   const entries = Object.entries(value as Record<string, unknown>)
     .filter(([, v]) => v !== undefined)
     .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-    .map(([k, v]) => `${JSON.stringify(k)}:${canonicalize(v)}`)
+    .map(([k, v]) => `${JSON.stringify(k)}:${canonicalize(v, depth + 1)}`)
   return `{${entries.join(",")}}`
 }
 
