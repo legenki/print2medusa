@@ -90,6 +90,89 @@ See `examples/basic-store/` for a fuller snippet.
 - Concurrent / re-fired payment events will not create a second Printful order: the order is **claimed insert-first** via a unique index on `printful_order_link.medusa_order_id` before the Printful API is called.
 - Shipping `province` is normalized to the 2-letter `state_code` Printful expects for US/CA.
 
+## Webhooks
+
+Printful notifies the store of fulfillment progress (`package_shipped`,
+`order_failed`, `order_canceled`, `package_returned`) at:
+
+```
+POST /hooks/printful/<webhookSecret>
+```
+
+Set the secret as a plugin option, then register the endpoint with Printful:
+
+```ts
+options: {
+  apiToken: process.env.PRINTFUL_API_TOKEN,
+  webhookSecret: process.env.PRINTFUL_WEBHOOK_SECRET, // long, random
+}
+```
+
+```bash
+curl -X POST https://your-store.com/admin/printful/webhook \
+  -H 'content-type: application/json' \
+  -d '{"base_url":"https://your-store.com"}'
+```
+
+The payload is treated as a **trigger, not a source of truth**: the endpoint
+stores the event, answers `200`, and the workflow re-reads
+`GET /orders/{id}` from Printful for the authoritative state.
+
+### The secret is in the URL path
+
+Printful API v1's webhook configuration accepts only `url`, `types` and
+`params` — there is no custom-header support — so the shared secret has to
+travel as a path segment. That has consequences worth planning around.
+
+**Treat the secret as rotatable, and expect it in access logs.** Any reverse
+proxy, load balancer, or CDN in front of Medusa logs request paths by default,
+and that is entirely outside this plugin's control. Anyone who can read those
+logs can forge webhook deliveries.
+
+Mitigations, in rough order of value:
+
+- **Scope it.** The secret only authenticates Printful's callback. It grants no
+  API access, and because payloads are re-verified against Printful's API, a
+  forged delivery cannot invent a shipment — at worst it triggers a redundant
+  re-read.
+- **Strip it at the proxy.** If your proxy supports rewriting logged paths, mask
+  the segment after `/hooks/printful/`.
+- **Rotate it** on any suspected log exposure, and on staff offboarding.
+
+### Rotating the secret
+
+1. Change `webhookSecret` to a new random value and restart Medusa.
+2. Re-register with Printful so it stops calling the old URL:
+   ```bash
+   curl -X POST https://your-store.com/admin/printful/webhook \
+     -H 'content-type: application/json' \
+     -d '{"base_url":"https://your-store.com"}'
+   ```
+
+Printful keeps **one webhook configuration per store**, so step 2 replaces the
+previous URL outright — the old secret stops being accepted as soon as Medusa
+restarts. Deliveries in flight during the swap are retried by Printful, and
+duplicate events are absorbed by the stored `event_id`, so rotation is safe to
+perform in production.
+
+`GET /admin/printful/webhook` shows the registered URL with the secret masked,
+so the admin UI can confirm the configuration without re-exposing the token.
+
+### Request logging
+
+Errors raised by this route (`404` bad token, `400` malformed payload, `500`
+storage failure) are logged with the secret replaced by `[redacted]`, since
+Medusa's error handler logs the request path verbatim.
+
+One gap remains and cannot be closed from plugin code: errors thrown by
+Medusa's **global body parser** — an oversized body or malformed JSON — reach
+the error handler without running any route-scoped middleware, so those log
+lines contain the real path. The endpoint's body limit is therefore raised to
+**1 MB**, well above the largest realistic delivery (a 50-line-item
+`package_shipped` measures ~262 KB; the framework default of 100 KB is in fact
+exceeded by roughly a 25-item order), so genuine Printful traffic does not
+reach that path. This is another reason to treat the secret as rotatable.
+
 ## Admin usage
 
 1. Create products in Printful (Store Products).
@@ -124,7 +207,9 @@ the testing strategy for each release.
 - **Printful is source of truth** for products; Medusa holds a copy + links.
 - Printful API **v1** (`https://api.printful.com`).
 - Long-running sync runs as a Medusa **workflow** (not a blocking HTTP body only—route awaits the workflow today; can be queued later).
-- Webhooks / multi-store / live rates: planned Phase 2.
+- Webhooks carry their secret in the URL path because Printful v1 supports no
+  custom headers — see [Webhooks](#webhooks).
+- Multi-store / live rates: planned Phase 2.
 
 ## Options
 
@@ -137,6 +222,7 @@ the testing strategy for each release.
 | `allowPartialOrders` | Allow orders that mix Printful + non-Printful items |
 | `markupPercent` | Markup on retail prices during sync |
 | `defaultCurrency` | Fallback currency code |
+| `webhookSecret` | Shared secret for the Printful webhook path (see [Webhooks](#webhooks)) |
 
 ## License
 
