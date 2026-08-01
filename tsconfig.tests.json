@@ -1,0 +1,16 @@
+{
+  // Tests are excluded from the main tsconfig because they must not reach the
+  // published build. They still need type checking, so this config covers them
+  // separately and CI runs it as `typecheck:tests`.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "types": ["node"],
+    // Vitest runs tests as ESM, so `import.meta` is legal here even though the
+    // plugin itself compiles to CommonJS.
+    "module": "ESNext",
+    "moduleResolution": "Bundler"
+  },
+  "include": ["tests/**/*.ts", "src/**/*.ts"],
+  "exclude": ["node_modules", ".medusa", "src/admin"]
+}
