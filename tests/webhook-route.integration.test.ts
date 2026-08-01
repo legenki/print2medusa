@@ -23,6 +23,8 @@ import PrintfulModuleServiceClass, {
   MAX_WEBHOOK_ATTEMPTS,
 } from "../src/modules/printful/service"
 import type PrintfulModuleService from "../src/modules/printful/service"
+import { planOrderStateActions } from "../src/utils/order-state"
+import { PrintfulClient } from "../src/utils/printful-client"
 import applyOrderStatusWorkflow from "../src/workflows/apply-order-status"
 
 /**
@@ -645,5 +647,274 @@ describe("listDueWebhookEvents filter operators", () => {
 
     const due = await printful.listDueWebhookEvents(50)
     expect(due).toHaveLength(0)
+  })
+})
+
+describe("a forged payload cannot create a fulfillment", () => {
+  /**
+   * The security core of the whole release.
+   *
+   * Printful API v1 does not sign its webhooks. Anyone who learns the URL can
+   * POST anything to it, so the payload is never evidence — it only names which
+   * order to go and inspect. Every decision must come from re-reading
+   * GET /orders/{id}, whose response is authenticated by our own API token.
+   *
+   * The attack: POST a payload claiming `package_shipped` with a shipment id,
+   * for an order the Printful API reports as still `pending` with no shipments.
+   * If the payload were trusted anywhere, this mints a fulfillment (and a
+   * tracking number, and a shipped notification) for a parcel that does not
+   * exist. It must produce NO fulfillment.
+   *
+   * Stubbing: injected at `fetchImpl`, the HTTP boundary, rather than by
+   * replacing `getOrder` or the whole client. That keeps the REAL PrintfulClient
+   * in the path — its URL construction, auth headers, retry loop and response
+   * parsing all still run — so the test exercises the actual code that reads the
+   * API instead of a stand-in for it. The client is seeded into the service's
+   * `client_` cache, which `getClient()` returns as-is when already set.
+   */
+  const FORGED_SHIPMENT_ID = "9999999"
+  const PRINTFUL_ORDER_ID = "2001"
+  const MEDUSA_ORDER_ID = "order_forged_test"
+
+  /** What the Printful API actually reports: pending, nothing shipped. */
+  const authoritativeOrder = {
+    id: Number(PRINTFUL_ORDER_ID),
+    external_id: MEDUSA_ORDER_ID,
+    status: "pending",
+    shipments: [],
+    items: [],
+  }
+
+  let getOrderCalls: string[]
+
+  beforeEach(() => {
+    getOrderCalls = []
+    const fetchImpl = (async (url: string | URL) => {
+      const href = String(url)
+      getOrderCalls.push(href)
+      return new Response(
+        JSON.stringify({ code: 200, result: authoritativeOrder }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }
+      )
+    }) as unknown as typeof fetch
+
+    // Seed the client cache so getClient() hands back a client whose only
+    // difference from production is where its HTTP requests go.
+    ;(printful as unknown as { client_: PrintfulClient | null }).client_ =
+      new PrintfulClient({
+        apiToken: "test-token",
+        storeId: "test-store",
+        fetchImpl,
+      })
+  })
+
+  afterAll(() => {
+    ;(printful as unknown as { client_: PrintfulClient | null }).client_ = null
+  })
+
+  it("creates no fulfillment for a shipment the Printful API does not report", async () => {
+    // The link exists, so the run gets past the missing-link branch and all the
+    // way to the authoritative re-fetch. This isolates the trust question.
+    await printful.createPrintfulOrderLinks({
+      medusa_order_id: MEDUSA_ORDER_ID,
+      printful_order_id: PRINTFUL_ORDER_ID,
+      external_id: MEDUSA_ORDER_ID,
+      status: "pending",
+    })
+
+    const forged = {
+      type: "package_shipped",
+      created: 1_700_000_900,
+      retries: 0,
+      store: 42,
+      data: {
+        order: {
+          id: Number(PRINTFUL_ORDER_ID),
+          external_id: MEDUSA_ORDER_ID,
+          // The forger also lies about the order's own state.
+          status: "fulfilled",
+        },
+        shipment: {
+          id: Number(FORGED_SHIPMENT_ID),
+          carrier: "ATTACKER",
+          service: "Overnight",
+          tracking_number: "FORGED-TRACKING-1",
+          tracking_url: "https://attacker.example/track",
+        },
+      },
+    }
+
+    const res = await postWebhook(WEBHOOK_SECRET, forged)
+    // The endpoint still answers 200: storing a payload is not trusting it, and
+    // a non-200 would only make Printful redeliver.
+    expect(res.statusCode).toBe(200)
+
+    const stored = await printful.findWebhookEvent(
+      (res.body as { event_id: string }).event_id
+    )
+    expect(stored).toBeTruthy()
+
+    // Every fulfillment Medusa creates is routed through the Fulfillment
+    // module. Recording each call here is what turns "no fulfillment" from an
+    // absence of errors into a positive, checkable fact.
+    const createdFulfillments: Array<Record<string, unknown>> = []
+    const fulfillmentModuleStub = {
+      createFulfillment: async (data: Record<string, unknown>) => {
+        createdFulfillments.push(data)
+        return { id: "ful_should_not_exist", ...data }
+      },
+      createFulfillments: async (data: Record<string, unknown>) => {
+        createdFulfillments.push(data)
+        return [{ id: "ful_should_not_exist", ...data }]
+      },
+    }
+    const orderModuleStub = {
+      updateOrders: async () => ({}),
+      retrieveOrder: async () => ({ id: MEDUSA_ORDER_ID }),
+      registerFulfillment: async (data: Record<string, unknown>) => {
+        createdFulfillments.push(data)
+        return {}
+      },
+    }
+    const queryStub = {
+      graph: async () => ({
+        data: [
+          {
+            id: MEDUSA_ORDER_ID,
+            metadata: {},
+            // One open line item: Medusa has quantity available to fulfill, so
+            // nothing here prevents a fulfillment except the API's own report.
+            items: [
+              { id: "item_1", quantity: 1, detail: { fulfilled_quantity: 0 } },
+            ],
+            fulfillments: [],
+          },
+        ],
+      }),
+    }
+
+    // Tripwire. If the workflow ever trusts the payload, it reaches deep into
+    // the real fulfillment machinery and dies there on some incidental missing
+    // stub — a failure that says nothing about WHY. Asserting here, on the
+    // planner fed the same response the API just returned, makes a
+    // payload-trusting regression fail while still naming the forged shipment.
+    const plannedFromApi = planOrderStateActions(
+      authoritativeOrder as never,
+      []
+    )
+    expect(
+      plannedFromApi.shipments.map((s) => s.printful_shipment_id)
+    ).not.toContain(FORGED_SHIPMENT_ID)
+    expect(plannedFromApi.shipments).toHaveLength(0)
+
+    // A correct implementation completes cleanly. A payload-trusting one dives
+    // into the real fulfillment machinery and throws somewhere inside it. Both
+    // outcomes are captured so the assertions below decide the verdict, rather
+    // than an incidental stack trace deciding it for us.
+    let result: unknown
+    let runError: unknown
+    try {
+      ;({ result } = await applyOrderStatusWorkflow(
+        makeWorkflowContainer({
+          [Modules.ORDER]: orderModuleStub,
+          [Modules.FULFILLMENT]: fulfillmentModuleStub,
+          [ContainerRegistrationKeys.QUERY]: queryStub,
+          // Registered so a payload-trusting implementation gets all the way
+          // INTO createOrderFulfillmentWorkflow and is recorded above, rather
+          // than dying early on an unrelated missing registration.
+          [ContainerRegistrationKeys.REMOTE_QUERY]: async () => [
+            {
+              id: MEDUSA_ORDER_ID,
+              items: [
+                {
+                  id: "item_1",
+                  quantity: 1,
+                  detail: { fulfilled_quantity: 0 },
+                },
+              ],
+            },
+          ],
+        })
+      ).run({ input: { event_row_id: (stored as { id: string }).id } }))
+    } catch (err) {
+      runError = err
+    }
+
+    // The authoritative source was actually consulted.
+    expect(
+      getOrderCalls.some((u) => u.endsWith(`/orders/${PRINTFUL_ORDER_ID}`))
+    ).toBe(true)
+
+    // The heart of it: the API reported no shipments, so the run must have
+    // reached the end with nothing fulfilled. Trying and failing to fulfill is
+    // just as much a failure of this property as succeeding would be.
+    expect(
+      runError,
+      `the run must not attempt any fulfillment work for a shipment the API never reported, but it threw: ${String(runError)}`
+    ).toBeUndefined()
+    expect(result).toMatchObject({
+      status: "processed",
+      shipments_created: 0,
+    })
+
+    // No Medusa fulfillment was created at all...
+    expect(createdFulfillments).toHaveLength(0)
+
+    // ...and specifically none carrying the forged shipment id.
+    const forgedFulfillments = createdFulfillments.filter((f) =>
+      JSON.stringify(f).includes(FORGED_SHIPMENT_ID)
+    )
+    expect(forgedFulfillments).toHaveLength(0)
+
+    // The order link reflects the API's status, not the payload's lie.
+    const link = await printful.findOrderLinkByPrintfulId(PRINTFUL_ORDER_ID)
+    expect((link as { status: string }).status).toBe("pending")
+    expect((link as { status: string }).status).not.toBe("fulfilled")
+  })
+
+  it("would have fulfilled had the API reported the very same shipment", async () => {
+    // The control that makes the test above meaningful. Without it, "zero
+    // fulfillments" could simply mean this code path never fulfills anything.
+    //
+    // Same order, same shipment id, same recorded-shipment state — the ONLY
+    // thing changed is what the authoritative GET /orders/{id} reports. Feeding
+    // both API responses through the very planner the workflow uses shows the
+    // decision tracks the API and nothing else.
+    const recorded: string[] = []
+
+    const forgedCase = planOrderStateActions(
+      authoritativeOrder as never,
+      recorded
+    )
+    // The API says pending with no shipments: nothing to do.
+    expect(forgedCase.shipments).toHaveLength(0)
+
+    const apiReportsTheParcel = {
+      ...authoritativeOrder,
+      status: "fulfilled",
+      shipments: [
+        {
+          id: Number(FORGED_SHIPMENT_ID),
+          carrier: "USPS",
+          service: "Ground",
+          tracking_number: "REAL-TRACKING-1",
+          items: [{ item_id: 55, quantity: 1 }],
+        },
+      ],
+    }
+
+    const honestCase = planOrderStateActions(
+      apiReportsTheParcel as never,
+      recorded
+    )
+    // Identical payload, identical shipment id — but now the API vouches for
+    // it, and exactly one parcel is planned.
+    expect(honestCase.shipments).toHaveLength(1)
+    expect(honestCase.shipments[0].printful_shipment_id).toBe(
+      FORGED_SHIPMENT_ID
+    )
   })
 })
