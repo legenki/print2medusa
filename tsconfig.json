@@ -31,6 +31,7 @@
     ".cache",
     "eslint.config.*",
     "vitest.config.ts",
+    "vitest.integration.config.ts",
     "tests"
   ]
 }

@@ -28,6 +28,30 @@ describe("isUniqueViolation", () => {
     ).toBe(true)
   })
 
+  it("detects the MedusaError that dbErrorMapper substitutes for 23505", () => {
+    // Medusa's dbErrorMapper swallows the driver error and throws a fresh
+    // MedusaError with no `code`, no `cause`, and no "23505" in the text. This
+    // exact shape was captured from a real Postgres insert conflict; if it
+    // stops being recognised, redelivered webhooks 500 instead of deduping.
+    const mapped = Object.assign(new Error(), {
+      __isMedusaError: true,
+      type: "invalid_data",
+      message: "Printful webhook event with event_id: abc123, already exists.",
+    })
+    expect(isUniqueViolation(mapped)).toBe(true)
+  })
+
+  it("does not treat other invalid_data errors as unique violations", () => {
+    expect(
+      isUniqueViolation(
+        Object.assign(new Error(), {
+          type: "invalid_data",
+          message: "Cannot set field 'status' of Printful order link to null",
+        })
+      )
+    ).toBe(false)
+  })
+
   it("returns false for unrelated errors", () => {
     expect(isUniqueViolation(new Error("network down"))).toBe(false)
     expect(isUniqueViolation({ code: "23503" })).toBe(false)

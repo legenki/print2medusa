@@ -72,16 +72,38 @@ export function lockKeyFor(printfulOrderId: string): number {
  * Detect a Postgres unique-constraint violation (SQLSTATE 23505) regardless of
  * how the ORM wraps the driver error. Used to turn a lost insert race into a
  * clean "already claimed" signal instead of a thrown error.
+ *
+ * The mapped-MedusaError branch is load-bearing and cannot be dropped. Medusa's
+ * dbErrorMapper (@medusajs/utils dal/mikro-orm/db-error-mapper) intercepts the
+ * driver's 23505 and throws a BRAND NEW MedusaError carrying only
+ * `type: "invalid_data"` and a prose message ending "already exists." — no
+ * `code`, no `cause` chain, and no "23505" anywhere in the text. Every other
+ * branch here misses it. Without this check a redelivered webhook (which
+ * Printful sends by design) surfaces as a 500 instead of being absorbed as a
+ * duplicate, and Printful then retries an event that can never succeed.
+ * Verified against a real Postgres in tests/webhook-route.integration.test.ts.
  */
 export function isUniqueViolation(err: unknown): boolean {
   if (!err || typeof err !== "object") {
     return false
   }
-  const e = err as { code?: string; cause?: unknown; message?: string }
+  const e = err as {
+    code?: string
+    cause?: unknown
+    message?: string
+    type?: string
+  }
   if (e.code === "23505") {
     return true
   }
   if (typeof e.message === "string" && e.message.includes("23505")) {
+    return true
+  }
+  if (
+    e.type === "invalid_data" &&
+    typeof e.message === "string" &&
+    /already exists\.?$/i.test(e.message.trim())
+  ) {
     return true
   }
   if (e.cause && e.cause !== err) {
