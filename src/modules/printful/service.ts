@@ -100,9 +100,12 @@ class PrintfulModuleService extends MedusaService({
   protected options_: PrintfulPluginOptions
   protected client_: PrintfulClient | null = null
   /** Injected by MedusaService's constructor; see BaseRepositoryLike above. */
-  protected declare baseRepository_: BaseRepositoryLike
+  declare protected baseRepository_: BaseRepositoryLike
 
-  constructor(container: InjectedDependencies, options?: PrintfulPluginOptions) {
+  constructor(
+    container: InjectedDependencies,
+    options?: PrintfulPluginOptions
+  ) {
     // MedusaService multi-arg constructor
     super(...arguments)
     this.options_ = options ?? ({} as PrintfulPluginOptions)

@@ -57,7 +57,8 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
 
   if (!options.webhookSecret) {
     res.status(400).json({
-      message: "Set the webhookSecret plugin option before registering a webhook",
+      message:
+        "Set the webhookSecret plugin option before registering a webhook",
     })
     return
   }
@@ -71,7 +72,9 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
   const url = `${body.base_url.replace(/\/$/, "")}/hooks/printful/${options.webhookSecret}`
 
   // Printful keeps one config per store, so this replaces the whole allowlist.
-  const updated = await client.setWebhookConfig(url, [...PRINTFUL_WEBHOOK_TYPES])
+  const updated = await client.setWebhookConfig(url, [
+    ...PRINTFUL_WEBHOOK_TYPES,
+  ])
 
   res.status(200).json({
     current: {

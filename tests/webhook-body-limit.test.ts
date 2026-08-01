@@ -9,9 +9,7 @@ import middlewaresConfig from "../src/api/middlewares"
 // are plain CJS. Load them by absolute path so the test drives the framework's
 // real implementation rather than a reimplementation of it.
 const require_ = createRequire(import.meta.url)
-const frameworkHttp = path.dirname(
-  require_.resolve("@medusajs/framework/http")
-)
+const frameworkHttp = path.dirname(require_.resolve("@medusajs/framework/http"))
 const { RoutesFinder } = require_(path.join(frameworkHttp, "routes-finder.js"))
 const { RoutesSorter } = require_(path.join(frameworkHttp, "routes-sorter.js"))
 const { createBodyParserMiddlewaresStack } = require_(

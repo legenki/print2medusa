@@ -59,7 +59,7 @@ const applyStep = createStep(
     })
 
     const link = await printful.findOrderLinkByPrintfulId(
-      event.printful_order_id,
+      event.printful_order_id
     )
     if (!link) {
       // Order links are written on payment.captured; a webhook can beat it.
@@ -238,7 +238,7 @@ const applyStep = createStep(
           // splits orders across facilities, so one fulfillment must never close
           // the whole order.
           const { result: fulfillment } = await createOrderFulfillmentWorkflow(
-            container,
+            container
           ).run({
             input: {
               order_id: link.medusa_order_id,
@@ -301,19 +301,19 @@ const applyStep = createStep(
         status,
         error_message: (err instanceof Error ? err.message : String(err)).slice(
           0,
-          1000,
+          1000
         ),
       })
       throw err
     }
-  },
+  }
 )
 
 export const applyOrderStatusWorkflow = createWorkflow(
   "apply-printful-order-status",
   (input: ApplyOrderStatusInput) => {
     return new WorkflowResponse(applyStep(input))
-  },
+  }
 )
 
 export default applyOrderStatusWorkflow

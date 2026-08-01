@@ -65,12 +65,12 @@ and rotate it accordingly — the README says so.
 
 ### Response contract
 
-| Condition | Status | Body |
-|---|---|---|
-| Valid token, event stored | `200` | `{ received: true, event_id }` |
-| Invalid or missing token | `404` | empty — do not confirm the path exists |
-| Unknown event type | `200` | stored with `status: "ignored"` |
-| Storage failure | `500` | only case where Printful should retry |
+| Condition                 | Status | Body                                   |
+| ------------------------- | ------ | -------------------------------------- |
+| Valid token, event stored | `200`  | `{ received: true, event_id }`         |
+| Invalid or missing token  | `404`  | empty — do not confirm the path exists |
+| Unknown event type        | `200`  | stored with `status: "ignored"`        |
+| Storage failure           | `500`  | only case where Printful should retry  |
 
 The route never returns `5xx` for business-logic problems. A `5xx` triggers
 Printful retries and turns one bad event into a storm.
@@ -113,13 +113,13 @@ event_id = sha256(
 
 Where `discriminator` is per event type:
 
-| Event type | Discriminator | Rationale |
-|---|---|---|
-| `package_shipped` | `shipment.id` | Multiple parcels per order must not collapse |
-| `package_returned` | `shipment.id` | Same |
-| `order_updated` | `order.updated` timestamp | Distinct edits are distinct events |
-| `order_failed` / `order_canceled` | `""` (empty) | Terminal and non-repeating per order |
-| unknown types | `payload_fingerprint` | Safe default |
+| Event type                        | Discriminator             | Rationale                                    |
+| --------------------------------- | ------------------------- | -------------------------------------------- |
+| `package_shipped`                 | `shipment.id`             | Multiple parcels per order must not collapse |
+| `package_returned`                | `shipment.id`             | Same                                         |
+| `order_updated`                   | `order.updated` timestamp | Distinct edits are distinct events           |
+| `order_failed` / `order_canceled` | `""` (empty)              | Terminal and non-repeating per order         |
+| unknown types                     | `payload_fingerprint`     | Safe default                                 |
 
 `payload_fingerprint` is `sha256` of the canonicalized **content** (keys sorted),
 used whenever the preferred field is absent. The raw payload is stored regardless,
@@ -136,19 +136,19 @@ reason.
 
 ### New: `printful_webhook_event`
 
-| Field | Type | Notes |
-|---|---|---|
-| `id` | id | primary key |
-| `event_id` | text | **unique index** — idempotency key |
-| `type` | text | raw Printful event type |
-| `printful_order_id` | text | indexed |
-| `printful_shipment_id` | text nullable | indexed — fast shipment dedupe |
-| `payload` | json | raw event, retained for triage |
-| `status` | text | `received` → `deferred` \| `processed` \| `ignored` \| `failed` |
-| `attempts` | number | default `0` |
-| `next_retry_at` | dateTime nullable | indexed |
-| `processed_at` | dateTime nullable | |
-| `error_message` | text nullable | |
+| Field                  | Type              | Notes                                                           |
+| ---------------------- | ----------------- | --------------------------------------------------------------- |
+| `id`                   | id                | primary key                                                     |
+| `event_id`             | text              | **unique index** — idempotency key                              |
+| `type`                 | text              | raw Printful event type                                         |
+| `printful_order_id`    | text              | indexed                                                         |
+| `printful_shipment_id` | text nullable     | indexed — fast shipment dedupe                                  |
+| `payload`              | json              | raw event, retained for triage                                  |
+| `status`               | text              | `received` → `deferred` \| `processed` \| `ignored` \| `failed` |
+| `attempts`             | number            | default `0`                                                     |
+| `next_retry_at`        | dateTime nullable | indexed                                                         |
+| `processed_at`         | dateTime nullable |                                                                 |
+| `error_message`        | text nullable     |                                                                 |
 
 ### Changed: `printful_order_link`
 
@@ -161,13 +161,13 @@ path and must not be a full scan. The pairing is one-to-one in both directions.
 `deferred` is the state that makes the race survivable. Order links are created on
 `payment.captured`; a webhook can legitimately arrive before that has committed.
 
-| Status | Meaning | Next action |
-|---|---|---|
-| `received` | Stored, not yet processed | Enqueued immediately |
-| `deferred` | No `printful_order_link` yet | Retried on schedule |
-| `processed` | Applied successfully | Terminal |
-| `ignored` | Type not handled | Terminal |
-| `failed` | Attempts exhausted | Terminal, visible in admin |
+| Status      | Meaning                      | Next action                |
+| ----------- | ---------------------------- | -------------------------- |
+| `received`  | Stored, not yet processed    | Enqueued immediately       |
+| `deferred`  | No `printful_order_link` yet | Retried on schedule        |
+| `processed` | Applied successfully         | Terminal                   |
+| `ignored`   | Type not handled             | Terminal                   |
+| `failed`    | Attempts exhausted           | Terminal, visible in admin |
 
 **Retry job** — runs every 5 minutes over rows where
 `status IN ('received','deferred')` and `next_retry_at <= now()` and
@@ -285,11 +285,11 @@ Recorded under `order.metadata` for admin and storefront visibility:
 Printful v1 exposes **one configuration per store** — a URL plus a list of event
 types. `POST` replaces the whole thing. Client methods are named for that reality:
 
-| Method | Endpoint | Purpose |
-|---|---|---|
-| `getWebhookConfig()` | `GET /webhooks` | Read current URL and types |
-| `setWebhookConfig(url, types)` | `POST /webhooks` | **Replaces the entire config** |
-| `disableWebhook()` | `DELETE /webhooks` | Remove support |
+| Method                         | Endpoint           | Purpose                        |
+| ------------------------------ | ------------------ | ------------------------------ |
+| `getWebhookConfig()`           | `GET /webhooks`    | Read current URL and types     |
+| `setWebhookConfig(url, types)` | `POST /webhooks`   | **Replaces the entire config** |
+| `disableWebhook()`             | `DELETE /webhooks` | Remove support                 |
 
 The admin UI must state plainly that saving replaces the existing URL and event
 list, and must display the current configuration before offering to overwrite it.

@@ -78,7 +78,8 @@ export function extractOrderId(payload: PrintfulWebhookPayload): string {
 export function extractShipmentId(
   payload: PrintfulWebhookPayload
 ): string | null {
-  const shipment = payload.data?.shipment as { id?: number | string } | undefined
+  const shipment = payload.data?.shipment as
+    { id?: number | string } | undefined
   if (shipment?.id == null || shipment.id === "") {
     return null
   }
@@ -112,7 +113,10 @@ export function deriveEventId(payload: PrintfulWebhookPayload): string {
       discriminator = extractShipmentId(payload) ?? stableFingerprint(payload)
       break
     case "order_updated":
-      discriminator = order?.updated != null ? String(order.updated) : stableFingerprint(payload)
+      discriminator =
+        order?.updated != null
+          ? String(order.updated)
+          : stableFingerprint(payload)
       break
     case "order_failed":
     case "order_canceled":
@@ -123,7 +127,9 @@ export function deriveEventId(payload: PrintfulWebhookPayload): string {
   }
 
   const timeKey =
-    payload.created != null ? String(payload.created) : stableFingerprint(payload)
+    payload.created != null
+      ? String(payload.created)
+      : stableFingerprint(payload)
 
   return createHash("sha256")
     .update(`${type}|${orderId}|${discriminator}|${timeKey}`)

@@ -22,12 +22,9 @@ type WorkflowInput = {
   name: string
 }
 
-const step2 = createStep(
-  "step-2",
-  async ({ name }: WorkflowInput) => {
-    return new StepResponse(`Hello ${name} from step two!`)
-  }
-)
+const step2 = createStep("step-2", async ({ name }: WorkflowInput) => {
+  return new StepResponse(`Hello ${name} from step two!`)
+})
 
 type WorkflowOutput = {
   message1: string
@@ -39,10 +36,10 @@ const helloWorldWorkflow = createWorkflow(
   (input: WorkflowInput) => {
     const greeting1 = step1()
     const greeting2 = step2(input)
-    
+
     return new WorkflowResponse({
       message1: greeting1,
-      message2: greeting2
+      message2: greeting2,
     })
   }
 )
@@ -57,22 +54,15 @@ You can execute the workflow from other resources, such as API routes, scheduled
 For example, to execute the workflow in an API route:
 
 ```ts
-import type {
-  MedusaRequest,
-  MedusaResponse,
-} from "@medusajs/framework"
+import type { MedusaRequest, MedusaResponse } from "@medusajs/framework"
 import myWorkflow from "../../../workflows/hello-world"
 
-export async function GET(
-  req: MedusaRequest,
-  res: MedusaResponse
-) {
-  const { result } = await myWorkflow(req.scope)
-    .run({
-      input: {
-        name: req.query.name as string,
-      },
-    })
+export async function GET(req: MedusaRequest, res: MedusaResponse) {
+  const { result } = await myWorkflow(req.scope).run({
+    input: {
+      name: req.query.name as string,
+    },
+  })
 
   res.send(result)
 }

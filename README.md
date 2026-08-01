@@ -76,13 +76,13 @@ See `examples/basic-store/` for a fuller snippet.
 
 ## What it does (MVP)
 
-| Feature | How |
-|--------|-----|
-| Product sync | Admin **Sync Now** or `POST /admin/printful/sync` → workflow pulls Printful Sync Products into Medusa |
-| Links | `printful_product_link` / `printful_variant_link` (+ metadata IDs) |
-| Orders | On `payment.captured` → creates Printful order with **`sync_variant_id`** |
-| Fulfillment provider | Select Printful shipping option in Admin locations |
-| Status | `GET /admin/printful/status` + product list widget |
+| Feature              | How                                                                                                   |
+| -------------------- | ----------------------------------------------------------------------------------------------------- |
+| Product sync         | Admin **Sync Now** or `POST /admin/printful/sync` → workflow pulls Printful Sync Products into Medusa |
+| Links                | `printful_product_link` / `printful_variant_link` (+ metadata IDs)                                    |
+| Orders               | On `payment.captured` → creates Printful order with **`sync_variant_id`**                             |
+| Fulfillment provider | Select Printful shipping option in Admin locations                                                    |
+| Status               | `GET /admin/printful/status` + product list widget                                                    |
 
 ### Idempotency
 
@@ -213,16 +213,16 @@ the testing strategy for each release.
 
 ## Options
 
-| Option | Description |
-|--------|-------------|
-| `apiToken` | Printful private token (required) |
-| `storeId` | `X-PF-Store-Id` for account-level tokens |
-| `autoSubmitOrders` | Confirm orders for fulfillment (default true) |
-| `createOnOrderPlaced` | Also create Printful order on `order.placed` |
-| `allowPartialOrders` | Allow orders that mix Printful + non-Printful items |
-| `markupPercent` | Markup on retail prices during sync |
-| `defaultCurrency` | Fallback currency code |
-| `webhookSecret` | Shared secret for the Printful webhook path (see [Webhooks](#webhooks)) |
+| Option                | Description                                                             |
+| --------------------- | ----------------------------------------------------------------------- |
+| `apiToken`            | Printful private token (required)                                       |
+| `storeId`             | `X-PF-Store-Id` for account-level tokens                                |
+| `autoSubmitOrders`    | Confirm orders for fulfillment (default true)                           |
+| `createOnOrderPlaced` | Also create Printful order on `order.placed`                            |
+| `allowPartialOrders`  | Allow orders that mix Printful + non-Printful items                     |
+| `markupPercent`       | Markup on retail prices during sync                                     |
+| `defaultCurrency`     | Fallback currency code                                                  |
+| `webhookSecret`       | Shared secret for the Printful webhook path (see [Webhooks](#webhooks)) |
 
 ## License
 

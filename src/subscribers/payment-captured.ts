@@ -25,9 +25,7 @@ export default async function paymentCapturedHandler({
   try {
     const orderId = await resolveOrderIdFromPayment(container, paymentId)
     if (!orderId) {
-      logger.error(
-        `Printful: could not resolve order for payment ${paymentId}`
-      )
+      logger.error(`Printful: could not resolve order for payment ${paymentId}`)
       return
     }
 

@@ -31,7 +31,9 @@ describe("verifyWebhookToken", () => {
   })
 
   it("rejects non-string input instead of throwing", () => {
-    expect(verifyWebhookToken("s3cret", ["s3cret"] as unknown as string)).toBe(false)
+    expect(verifyWebhookToken("s3cret", ["s3cret"] as unknown as string)).toBe(
+      false
+    )
     expect(verifyWebhookToken("s3cret", 123 as unknown as string)).toBe(false)
     expect(verifyWebhookToken("s3cret", {} as unknown as string)).toBe(false)
     expect(verifyWebhookToken(42 as unknown as string, "s3cret")).toBe(false)
@@ -55,14 +57,25 @@ describe("deriveEventId", () => {
   it("distinguishes two shipments of the same order", () => {
     const second = {
       ...shipped,
-      data: { ...shipped.data, shipment: { id: 5002, tracking_number: "1Z888" } },
+      data: {
+        ...shipped.data,
+        shipment: { id: 5002, tracking_number: "1Z888" },
+      },
     }
     expect(deriveEventId(shipped)).not.toBe(deriveEventId(second))
   })
 
   it("distinguishes two order_updated events by updated timestamp", () => {
-    const a = { type: "order_updated", created: 1, data: { order: { id: 9, updated: 100 } } }
-    const b = { type: "order_updated", created: 1, data: { order: { id: 9, updated: 200 } } }
+    const a = {
+      type: "order_updated",
+      created: 1,
+      data: { order: { id: 9, updated: 100 } },
+    }
+    const b = {
+      type: "order_updated",
+      created: 1,
+      data: { order: { id: 9, updated: 200 } },
+    }
     expect(deriveEventId(a)).not.toBe(deriveEventId(b))
   })
 
@@ -73,8 +86,14 @@ describe("deriveEventId", () => {
   })
 
   it("falls back to a payload fingerprint for unknown types", () => {
-    const a = { type: "some_future_event", data: { order: { id: 3 }, extra: "a" } }
-    const b = { type: "some_future_event", data: { order: { id: 3 }, extra: "b" } }
+    const a = {
+      type: "some_future_event",
+      data: { order: { id: 3 }, extra: "a" },
+    }
+    const b = {
+      type: "some_future_event",
+      data: { order: { id: 3 }, extra: "b" },
+    }
     expect(deriveEventId(a)).not.toBe(deriveEventId(b))
   })
 
@@ -125,13 +144,25 @@ describe("deriveEventId", () => {
   })
 
   it("distinguishes two package_returned events by shipment id", () => {
-    const a = { type: "package_returned", created: 1, data: { order: { id: 15 }, shipment: { id: 71 } } }
-    const b = { type: "package_returned", created: 1, data: { order: { id: 15 }, shipment: { id: 72 } } }
+    const a = {
+      type: "package_returned",
+      created: 1,
+      data: { order: { id: 15 }, shipment: { id: 71 } },
+    }
+    const b = {
+      type: "package_returned",
+      created: 1,
+      data: { order: { id: 15 }, shipment: { id: 72 } },
+    }
     expect(deriveEventId(a)).not.toBe(deriveEventId(b))
   })
 
   it("treats an empty shipment id as absent", () => {
-    const withEmpty = { type: "package_shipped", created: 2, data: { order: { id: 16 }, shipment: { id: "" } } }
+    const withEmpty = {
+      type: "package_shipped",
+      created: 2,
+      data: { order: { id: 16 }, shipment: { id: "" } },
+    }
     expect(extractShipmentId(withEmpty)).toBeNull()
   })
 

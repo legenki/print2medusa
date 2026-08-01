@@ -30,8 +30,7 @@ const PrintfulOrderWidget = ({ data }: DetailWidgetProps<AdminOrder>) => {
 
   const status = metadata.printful_status as string | undefined
   const statusUpdatedAt = metadata.printful_status_updated_at as
-    | string
-    | undefined
+    string | undefined
   const shipments = (metadata.printful_shipments ?? []) as PrintfulShipment[]
 
   const isAttention = status ? ATTENTION_STATES.has(status) : false

@@ -21,7 +21,10 @@ describe("planOrderStateActions", () => {
       ],
     }
     const plan = planOrderStateActions(order, [])
-    expect(plan.shipments.map((s) => s.printful_shipment_id)).toEqual(["1", "2"])
+    expect(plan.shipments.map((s) => s.printful_shipment_id)).toEqual([
+      "1",
+      "2",
+    ])
     expect(plan.shipments[0].tracking_number).toBe("A1")
   })
 
@@ -39,7 +42,9 @@ describe("planOrderStateActions", () => {
     // Metadata keeps the full history — the admin widget renders every parcel,
     // not just the ones we have yet to record.
     expect(
-      (plan.metadata.printful_shipments as Array<{ id: string }>).map((s) => s.id)
+      (plan.metadata.printful_shipments as Array<{ id: string }>).map(
+        (s) => s.id
+      )
     ).toEqual(["1", "2"])
   })
 
@@ -60,13 +65,21 @@ describe("planOrderStateActions", () => {
   })
 
   it("flags canceled and onhold as needing attention", () => {
-    expect(planOrderStateActions({ ...base, status: "canceled" }, []).needsAttention).toBe(true)
-    expect(planOrderStateActions({ ...base, status: "onhold" }, []).needsAttention).toBe(true)
+    expect(
+      planOrderStateActions({ ...base, status: "canceled" }, []).needsAttention
+    ).toBe(true)
+    expect(
+      planOrderStateActions({ ...base, status: "onhold" }, []).needsAttention
+    ).toBe(true)
   })
 
   it("does not flag ordinary in-progress states", () => {
-    expect(planOrderStateActions({ ...base, status: "inprocess" }, []).needsAttention).toBe(false)
-    expect(planOrderStateActions({ ...base, status: "fulfilled" }, []).needsAttention).toBe(false)
+    expect(
+      planOrderStateActions({ ...base, status: "inprocess" }, []).needsAttention
+    ).toBe(false)
+    expect(
+      planOrderStateActions({ ...base, status: "fulfilled" }, []).needsAttention
+    ).toBe(false)
   })
 
   it("carries shipment details into metadata", () => {
@@ -74,12 +87,27 @@ describe("planOrderStateActions", () => {
       ...base,
       status: "fulfilled",
       shipments: [
-        { id: 3, carrier: "UPS", service: "Ground", tracking_number: "C3", tracking_url: "http://t/C3", ship_date: "2026-07-31" },
+        {
+          id: 3,
+          carrier: "UPS",
+          service: "Ground",
+          tracking_number: "C3",
+          tracking_url: "http://t/C3",
+          ship_date: "2026-07-31",
+        },
       ],
     }
     const meta = planOrderStateActions(order, []).metadata
     expect(meta.printful_shipments).toEqual([
-      { id: "3", carrier: "UPS", service: "Ground", tracking_number: "C3", tracking_url: "http://t/C3", ship_date: "2026-07-31", reshipment: false },
+      {
+        id: "3",
+        carrier: "UPS",
+        service: "Ground",
+        tracking_number: "C3",
+        tracking_url: "http://t/C3",
+        ship_date: "2026-07-31",
+        reshipment: false,
+      },
     ])
   })
 

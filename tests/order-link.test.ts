@@ -24,7 +24,7 @@ describe("isUniqueViolation", () => {
 
   it("detects 23505 mentioned in the message", () => {
     expect(
-      isUniqueViolation(new Error('duplicate key value ... code 23505'))
+      isUniqueViolation(new Error("duplicate key value ... code 23505"))
     ).toBe(true)
   })
 

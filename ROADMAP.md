@@ -7,12 +7,12 @@ plugin in a working state. The testing strategy tightens as the API surface grow
 
 ## Where we are
 
-| | |
-|---|---|
-| Published version | `0.1.0` |
-| Tests | 23 |
+|                       |                         |
+| --------------------- | ----------------------- |
+| Published version     | `0.1.0`                 |
+| Tests                 | 23                      |
 | Printful API coverage | 3 of 15 endpoint groups |
-| Test layers | unit only |
+| Test layers           | unit only               |
 
 The plugin uses three endpoints: `/store/products`, `/orders`, and order
 cancellation. Out of the fifteen groups Printful exposes that is a narrow band —
@@ -38,10 +38,10 @@ customer never learns that the parcel shipped. This is the most visible gap.
 
 ### API surface
 
-| Endpoint | Purpose |
-|---|---|
-| `POST /webhooks` | Register the callback URL and event list |
-| `GET /webhooks` | Inspect the current configuration |
+| Endpoint           | Purpose                                      |
+| ------------------ | -------------------------------------------- |
+| `POST /webhooks`   | Register the callback URL and event list     |
+| `GET /webhooks`    | Inspect the current configuration            |
 | `GET /orders/{id}` | Status reconciliation (fallback to webhooks) |
 
 ### Scope
@@ -70,10 +70,10 @@ rate for the address and cart contents.
 
 ### API surface
 
-| Endpoint | Purpose |
-|---|---|
-| `POST /shipping/rates` | Rates for an address and item set |
-| `GET /countries` | Validate countries and region codes |
+| Endpoint               | Purpose                             |
+| ---------------------- | ----------------------------------- |
+| `POST /shipping/rates` | Rates for an address and item set   |
+| `GET /countries`       | Validate countries and region codes |
 
 ### Scope
 
@@ -103,11 +103,11 @@ We also cannot see Printful stock: an item can sell out while the store keeps se
 
 ### API surface
 
-| Endpoint | Purpose |
-|---|---|
-| `GET /products/variant/{id}` | Blank availability and pricing |
-| `GET /products/{id}/sizes` | Size guides for descriptions |
-| `stock_updated` webhook | Real-time stock (v2 refreshes every 5 min) |
+| Endpoint                     | Purpose                                    |
+| ---------------------------- | ------------------------------------------ |
+| `GET /products/variant/{id}` | Blank availability and pricing             |
+| `GET /products/{id}/sizes`   | Size guides for descriptions               |
+| `stock_updated` webhook      | Real-time stock (v2 refreshes every 5 min) |
 
 ### Scope
 
@@ -133,12 +133,12 @@ return. `createReturnFulfillment` is a stub today.
 
 ### API surface
 
-| Endpoint | Purpose |
-|---|---|
-| `POST /tax/rates` | Address-based tax (Tax Provider) |
-| `GET /tax/countries` | Where Printful calculates tax |
+| Endpoint                      | Purpose                             |
+| ----------------------------- | ----------------------------------- |
+| `POST /tax/rates`             | Address-based tax (Tax Provider)    |
+| `GET /tax/countries`          | Where Printful calculates tax       |
 | `POST /orders/estimate-costs` | Cost of goods before order creation |
-| `GET /reports/statistics` | Sales summary for the admin |
+| `GET /reports/statistics`     | Sales summary for the admin         |
 
 ### Scope
 
@@ -182,14 +182,14 @@ delivery dates.
 
 ## How testing tightens
 
-| Version | Layer added | What it catches |
-|---|---|---|
-| `0.1.0` | Unit | Mapper logic, client retries, races |
-| `0.2.0` | Route integration | HTTP contract, webhook idempotency |
-| `0.3.0` | Contract + resilience | Printful schema drift, checkout breakage |
-| `0.4.0` | Load + concurrency | Timeouts, compensation, concurrent sync |
-| `0.5.0` | Property-based on money | Rounding, multi-currency |
-| `1.0.0` | E2E + compatibility matrix | Upgrade regressions, v1/v2 parity |
+| Version | Layer added                | What it catches                          |
+| ------- | -------------------------- | ---------------------------------------- |
+| `0.1.0` | Unit                       | Mapper logic, client retries, races      |
+| `0.2.0` | Route integration          | HTTP contract, webhook idempotency       |
+| `0.3.0` | Contract + resilience      | Printful schema drift, checkout breakage |
+| `0.4.0` | Load + concurrency         | Timeouts, compensation, concurrent sync  |
+| `0.5.0` | Property-based on money    | Rounding, multi-currency                 |
+| `1.0.0` | E2E + compatibility matrix | Upgrade regressions, v1/v2 parity        |
 
 ## Why this order
 

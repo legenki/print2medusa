@@ -100,7 +100,9 @@ export class PrintfulClient {
     return all
   }
 
-  async getSyncProduct(id: number | string): Promise<PrintfulSyncProductDetail> {
+  async getSyncProduct(
+    id: number | string
+  ): Promise<PrintfulSyncProductDetail> {
     const data = await this.request<PrintfulSyncProductDetail>(
       `/store/products/${id}`
     )

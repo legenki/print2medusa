@@ -201,10 +201,10 @@ const PrintfulSyncWidget = () => {
           </Button>
         </div>
         <Text size="small" className="text-ui-fg-subtle">
-          Printful allows only one webhook configuration per store.
-          Registering replaces any existing Printful webhook URL and event
-          list — including one set up by another integration or a previous
-          install of this plugin.
+          Printful allows only one webhook configuration per store. Registering
+          replaces any existing Printful webhook URL and event list — including
+          one set up by another integration or a previous install of this
+          plugin.
         </Text>
         {webhookLoading && !webhook ? (
           <Text size="small">Loading webhook configuration…</Text>
