@@ -79,7 +79,7 @@ describe("planOrderStateActions", () => {
     }
     const meta = planOrderStateActions(order, []).metadata
     expect(meta.printful_shipments).toEqual([
-      { id: "3", carrier: "UPS", service: "Ground", tracking_number: "C3", tracking_url: "http://t/C3", ship_date: "2026-07-31" },
+      { id: "3", carrier: "UPS", service: "Ground", tracking_number: "C3", tracking_url: "http://t/C3", ship_date: "2026-07-31", reshipment: false },
     ])
   })
 
@@ -160,5 +160,42 @@ describe("planOrderStateActions", () => {
       ],
     }
     expect(planOrderStateActions(order, []).shipments[0].reshipment).toBe(true)
+  })
+
+  // A reshipment clamps to zero unfulfilled quantity, so apply-order-status
+  // creates no fulfillment for it and its tracking number exists nowhere else.
+  // Metadata is the only place a replacement parcel is visible to the admin,
+  // and without this flag it is indistinguishable from the original.
+  it("records the reshipment flag in shipment metadata", () => {
+    const order: PrintfulOrder = {
+      ...base,
+      status: "fulfilled",
+      shipments: [
+        { id: 1, tracking_number: "A1" },
+        { id: 2, tracking_number: "B2", reshipment: true },
+      ],
+    }
+
+    const shipments = planOrderStateActions(order, []).metadata
+      .printful_shipments as Array<Record<string, unknown>>
+
+    expect(shipments[0].reshipment).toBe(false)
+    expect(shipments[1].reshipment).toBe(true)
+  })
+
+  // Printful omits `reshipment` on ordinary parcels rather than sending false.
+  // Normalizing to a boolean keeps the admin widget from rendering `undefined`
+  // as an absent flag it cannot distinguish from a genuine original.
+  it("normalizes a missing reshipment flag to false in metadata", () => {
+    const order: PrintfulOrder = {
+      ...base,
+      status: "fulfilled",
+      shipments: [{ id: 1, tracking_number: "A1" }],
+    }
+
+    const shipments = planOrderStateActions(order, []).metadata
+      .printful_shipments as Array<Record<string, unknown>>
+
+    expect(shipments[0].reshipment).toBe(false)
   })
 })

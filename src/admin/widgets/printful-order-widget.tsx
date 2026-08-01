@@ -9,6 +9,12 @@ type PrintfulShipment = {
   tracking_number?: string
   tracking_url?: string
   ship_date?: string
+  /**
+   * True when Printful re-shipped this parcel. A reshipment consumes no
+   * unfulfilled quantity, so it has no Medusa fulfillment and this widget is
+   * the only place its tracking number is visible.
+   */
+  reshipment?: boolean
 }
 
 /** Printful states that mean a human should look at the order; mirrors order-state.ts. */
@@ -46,10 +52,25 @@ const PrintfulOrderWidget = ({ data }: DetailWidgetProps<AdminOrder>) => {
           <div className="flex flex-col gap-3 pt-1">
             {shipments.map((shipment) => (
               <div key={shipment.id} className="flex flex-col gap-0.5">
-                <Text size="small">
-                  {shipment.carrier ?? "Unknown carrier"}
-                  {shipment.service ? ` · ${shipment.service}` : ""}
-                </Text>
+                <div className="flex items-center gap-2">
+                  <Text size="small">
+                    {shipment.carrier ?? "Unknown carrier"}
+                    {shipment.service ? ` · ${shipment.service}` : ""}
+                  </Text>
+                  {shipment.reshipment ? (
+                    <Badge color="purple" size="2xsmall">
+                      Reshipment
+                    </Badge>
+                  ) : null}
+                </div>
+                {/* A reshipment has no fulfillment behind it, so the badge is
+                    the only cue that this parcel is a replacement rather than a
+                    second original. Spell out what it means. */}
+                {shipment.reshipment ? (
+                  <Text size="small" className="text-ui-fg-subtle">
+                    Replacement parcel — no fulfillment is recorded for it.
+                  </Text>
+                ) : null}
                 <Text size="small" className="text-ui-fg-subtle">
                   {shipment.ship_date
                     ? `Shipped ${new Date(shipment.ship_date).toLocaleDateString()}`

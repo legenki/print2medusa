@@ -80,6 +80,11 @@ export function planOrderStateActions(
         tracking_number: s.tracking_number,
         tracking_url: s.tracking_url,
         ship_date: s.ship_date,
+        // A reshipment clamps to zero remaining quantity in apply-order-status,
+        // so it produces no Medusa fulfillment and this metadata entry is the
+        // only record of the replacement parcel's tracking. Normalized to a
+        // boolean because Printful omits the field on ordinary parcels.
+        reshipment: s.reshipment ?? false,
       })),
     },
     needsAttention: ATTENTION_STATES.has(order.status),
