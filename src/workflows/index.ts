@@ -5,3 +5,8 @@ export {
   createPrintfulOrderWorkflow as createPrintfulOrder,
 } from "./create-printful-order"
 export type { CreatePrintfulOrderInput } from "./create-printful-order"
+export {
+  default as applyOrderStatusWorkflow,
+  applyOrderStatusWorkflow as applyOrderStatus,
+} from "./apply-order-status"
+export type { ApplyOrderStatusInput } from "./apply-order-status"
