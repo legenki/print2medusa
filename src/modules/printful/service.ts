@@ -229,6 +229,11 @@ class PrintfulModuleService extends MedusaService({
    * check before either writes, producing two fulfillments for one parcel.
    * Different orders remain parallel.
    *
+   * This provides serialization, NOT atomicity. Work performed inside `fn`
+   * (core-flow runs, module-service writes) uses its own managers and commits
+   * independently of this transaction, so a later failure does not roll the
+   * earlier writes back. Callers must not assume all-or-nothing semantics.
+   *
    * Uses the transaction-scoped lock deliberately. The session-scoped variant
    * cannot work here: getActiveManager() forks without a transaction context,
    * so knex takes a fresh pool connection per statement and the unlock can land

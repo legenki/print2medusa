@@ -1,5 +1,11 @@
 import type { PrintfulOrder } from "./types"
 
+export type PlannedShipmentItem = {
+  /** Printful line item id; join to Medusa via the order item's external_id. */
+  item_id: number
+  quantity: number
+}
+
 export type PlannedShipment = {
   printful_shipment_id: string
   carrier?: string
@@ -7,6 +13,13 @@ export type PlannedShipment = {
   tracking_number?: string
   tracking_url?: string
   ship_date?: string
+  /** True when Printful re-shipped this parcel. */
+  reshipment?: boolean
+  /**
+   * Items in this parcel. Undefined when Printful omitted the breakdown, which
+   * callers must treat as "unknown", not as "empty".
+   */
+  items?: PlannedShipmentItem[]
 }
 
 export type OrderStatePlan = {
@@ -43,6 +56,13 @@ export function planOrderStateActions(
     tracking_number: s.tracking_number,
     tracking_url: s.tracking_url,
     ship_date: s.ship_date,
+    reshipment: s.reshipment,
+    // Left undefined when Printful omits the breakdown so the caller can tell
+    // "no item data" apart from "a parcel containing nothing".
+    items: s.items?.map((i) => ({
+      item_id: Number(i.item_id),
+      quantity: Number(i.quantity),
+    })),
   }))
 
   return {

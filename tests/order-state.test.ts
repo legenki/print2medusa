@@ -97,4 +97,68 @@ describe("planOrderStateActions", () => {
     expect(plan.shipments).toHaveLength(0)
     expect(plan.metadata.printful_shipments).toEqual([])
   })
+
+  it("gives each parcel of a split order only its own items", () => {
+    const order: PrintfulOrder = {
+      ...base,
+      status: "partial",
+      items: [
+        { id: 11, external_id: "orli_a", quantity: 2 },
+        { id: 22, external_id: "orli_b", quantity: 1 },
+      ],
+      shipments: [
+        {
+          id: 1,
+          tracking_number: "A1",
+          items: [{ item_id: 11, quantity: 2 }],
+        },
+        {
+          id: 2,
+          tracking_number: "B2",
+          items: [{ item_id: 22, quantity: 1 }],
+        },
+      ],
+    }
+
+    const plan = planOrderStateActions(order, [])
+    expect(plan.shipments).toHaveLength(2)
+    expect(plan.shipments[0].items).toEqual([{ item_id: 11, quantity: 2 }])
+    expect(plan.shipments[1].items).toEqual([{ item_id: 22, quantity: 1 }])
+  })
+
+  it("splits one line item across two parcels by quantity", () => {
+    const order: PrintfulOrder = {
+      ...base,
+      status: "partial",
+      items: [{ id: 11, external_id: "orli_a", quantity: 3 }],
+      shipments: [
+        { id: 1, items: [{ item_id: 11, quantity: 1 }] },
+        { id: 2, items: [{ item_id: 11, quantity: 2 }] },
+      ],
+    }
+
+    const plan = planOrderStateActions(order, [])
+    expect(plan.shipments[0].items).toEqual([{ item_id: 11, quantity: 1 }])
+    expect(plan.shipments[1].items).toEqual([{ item_id: 11, quantity: 2 }])
+  })
+
+  it("leaves items undefined when Printful omits the breakdown", () => {
+    const order: PrintfulOrder = {
+      ...base,
+      status: "fulfilled",
+      shipments: [{ id: 1, tracking_number: "A1" }],
+    }
+    expect(planOrderStateActions(order, []).shipments[0].items).toBeUndefined()
+  })
+
+  it("carries the reshipment flag through to the plan", () => {
+    const order: PrintfulOrder = {
+      ...base,
+      status: "fulfilled",
+      shipments: [
+        { id: 1, reshipment: true, items: [{ item_id: 11, quantity: 1 }] },
+      ],
+    }
+    expect(planOrderStateActions(order, []).shipments[0].reshipment).toBe(true)
+  })
 })

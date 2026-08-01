@@ -112,7 +112,9 @@ export type PrintfulOrder = {
   updated?: number
   recipient?: PrintfulRecipient
   items?: Array<{
+    /** Printful line item id, referenced by OrderShipmentItem.item_id. */
     id: number
+    /** Line item id from the external system — we set the Medusa line item id. */
     external_id?: string
     variant_id?: number
     sync_variant_id?: number
@@ -126,6 +128,15 @@ export type PrintfulOrder = {
     tracking_number?: string
     tracking_url?: string
     ship_date?: string
+    /** True when Printful re-shipped a parcel; must not be double-counted. */
+    reshipment?: boolean
+    /** Per-parcel item breakdown. Absent on older/partial payloads. */
+    items?: Array<{
+      item_id: number
+      quantity: number
+      picked?: number
+      printed?: number
+    }>
   }>
 }
 
