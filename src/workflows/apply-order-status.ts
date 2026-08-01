@@ -77,6 +77,10 @@ const applyStep = createStep(
     }
 
     try {
+      // The lint rule cannot see through the withOrderLock closure, but every
+      // return inside it is a `new StepResponse(...)` — as are the two early
+      // returns above.
+      // eslint-disable-next-line @medusajs/step-must-return-step-response
       return await printful.withOrderLock(event.printful_order_id, async () => {
         const client = await printful.getClient()
         // The payload is untrusted — Printful API v1 does not sign webhooks. It
