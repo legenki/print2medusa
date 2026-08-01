@@ -17,27 +17,27 @@
 
 **Create:**
 
-| File | Responsibility |
-|---|---|
-| `src/utils/webhook-events.ts` | Pure functions: `deriveEventId`, `payloadFingerprint`, `verifyWebhookToken`, event type constants |
-| `src/utils/order-state.ts` | Pure function: `planOrderStateActions` — turns a Printful order into a list of intended actions |
-| `src/modules/printful/models/printful-webhook-event.ts` | The event log model |
-| `src/modules/printful/migrations/Migration20260731000000.ts` | New table + reverse index on `printful_order_link` |
-| `src/api/hooks/printful/[token]/route.ts` | Public webhook endpoint |
-| `src/workflows/apply-order-status.ts` | Reads Printful order, applies fulfillments/shipments/metadata |
-| `src/jobs/retry-webhook-events.ts` | Drains `received`/`deferred` events on a schedule |
-| `src/admin/widgets/printful-order-widget.tsx` | Order-page status and tracking |
-| `tests/webhook-events.test.ts` | Unit tests for token + event id derivation |
-| `tests/order-state.test.ts` | Unit tests for action planning |
+| File                                                         | Responsibility                                                                                    |
+| ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------- |
+| `src/utils/webhook-events.ts`                                | Pure functions: `deriveEventId`, `payloadFingerprint`, `verifyWebhookToken`, event type constants |
+| `src/utils/order-state.ts`                                   | Pure function: `planOrderStateActions` — turns a Printful order into a list of intended actions   |
+| `src/modules/printful/models/printful-webhook-event.ts`      | The event log model                                                                               |
+| `src/modules/printful/migrations/Migration20260731000000.ts` | New table + reverse index on `printful_order_link`                                                |
+| `src/api/hooks/printful/[token]/route.ts`                    | Public webhook endpoint                                                                           |
+| `src/workflows/apply-order-status.ts`                        | Reads Printful order, applies fulfillments/shipments/metadata                                     |
+| `src/jobs/retry-webhook-events.ts`                           | Drains `received`/`deferred` events on a schedule                                                 |
+| `src/admin/widgets/printful-order-widget.tsx`                | Order-page status and tracking                                                                    |
+| `tests/webhook-events.test.ts`                               | Unit tests for token + event id derivation                                                        |
+| `tests/order-state.test.ts`                                  | Unit tests for action planning                                                                    |
 
 **Modify:**
 
-| File | Change |
-|---|---|
-| `src/utils/types.ts` | Webhook payload and config types |
-| `src/utils/printful-client.ts` | `getWebhookConfig`, `setWebhookConfig`, `disableWebhook` |
-| `src/modules/printful/service.ts` | Event CRUD, `findOrderLinkByPrintfulId`, advisory lock helper |
-| `src/api/admin/printful/webhook/route.ts` | New admin route for config read/write |
+| File                                      | Change                                                        |
+| ----------------------------------------- | ------------------------------------------------------------- |
+| `src/utils/types.ts`                      | Webhook payload and config types                              |
+| `src/utils/printful-client.ts`            | `getWebhookConfig`, `setWebhookConfig`, `disableWebhook`      |
+| `src/modules/printful/service.ts`         | Event CRUD, `findOrderLinkByPrintfulId`, advisory lock helper |
+| `src/api/admin/printful/webhook/route.ts` | New admin route for config read/write                         |
 
 Pure logic lives in `src/utils/` so it can be tested without a Medusa container. Everything that touches the container stays in workflows, routes, and the service.
 
@@ -46,6 +46,7 @@ Pure logic lives in `src/utils/` so it can be tested without a Medusa container.
 ## Task 1: Webhook token verification
 
 **Files:**
+
 - Create: `src/utils/webhook-events.ts`
 - Test: `tests/webhook-events.test.ts`
 
@@ -128,6 +129,7 @@ Refs #2"
 ## Task 2: Event id derivation
 
 **Files:**
+
 - Modify: `src/utils/webhook-events.ts`
 - Test: `tests/webhook-events.test.ts`
 
@@ -136,7 +138,10 @@ Refs #2"
 Append to `tests/webhook-events.test.ts`:
 
 ```typescript
-import { deriveEventId, PRINTFUL_WEBHOOK_TYPES } from "../src/utils/webhook-events"
+import {
+  deriveEventId,
+  PRINTFUL_WEBHOOK_TYPES,
+} from "../src/utils/webhook-events"
 
 describe("deriveEventId", () => {
   const shipped = {
@@ -155,14 +160,25 @@ describe("deriveEventId", () => {
   it("distinguishes two shipments of the same order", () => {
     const second = {
       ...shipped,
-      data: { ...shipped.data, shipment: { id: 5002, tracking_number: "1Z888" } },
+      data: {
+        ...shipped.data,
+        shipment: { id: 5002, tracking_number: "1Z888" },
+      },
     }
     expect(deriveEventId(shipped)).not.toBe(deriveEventId(second))
   })
 
   it("distinguishes two order_updated events by updated timestamp", () => {
-    const a = { type: "order_updated", created: 1, data: { order: { id: 9, updated: 100 } } }
-    const b = { type: "order_updated", created: 1, data: { order: { id: 9, updated: 200 } } }
+    const a = {
+      type: "order_updated",
+      created: 1,
+      data: { order: { id: 9, updated: 100 } },
+    }
+    const b = {
+      type: "order_updated",
+      created: 1,
+      data: { order: { id: 9, updated: 200 } },
+    }
     expect(deriveEventId(a)).not.toBe(deriveEventId(b))
   })
 
@@ -173,8 +189,14 @@ describe("deriveEventId", () => {
   })
 
   it("falls back to a payload fingerprint for unknown types", () => {
-    const a = { type: "some_future_event", data: { order: { id: 3 }, extra: "a" } }
-    const b = { type: "some_future_event", data: { order: { id: 3 }, extra: "b" } }
+    const a = {
+      type: "some_future_event",
+      data: { order: { id: 3 }, extra: "a" },
+    }
+    const b = {
+      type: "some_future_event",
+      data: { order: { id: 3 }, extra: "b" },
+    }
     expect(deriveEventId(a)).not.toBe(deriveEventId(b))
   })
 
@@ -246,7 +268,8 @@ export function extractOrderId(payload: PrintfulWebhookPayload): string {
 export function extractShipmentId(
   payload: PrintfulWebhookPayload
 ): string | null {
-  const shipment = payload.data?.shipment as { id?: number | string } | undefined
+  const shipment = payload.data?.shipment as
+    { id?: number | string } | undefined
   return shipment?.id != null ? String(shipment.id) : null
 }
 
@@ -267,7 +290,10 @@ export function deriveEventId(payload: PrintfulWebhookPayload): string {
       discriminator = extractShipmentId(payload) ?? payloadFingerprint(payload)
       break
     case "order_updated":
-      discriminator = order?.updated != null ? String(order.updated) : payloadFingerprint(payload)
+      discriminator =
+        order?.updated != null
+          ? String(order.updated)
+          : payloadFingerprint(payload)
       break
     case "order_failed":
     case "order_canceled":
@@ -278,7 +304,9 @@ export function deriveEventId(payload: PrintfulWebhookPayload): string {
   }
 
   const timeKey =
-    payload.created != null ? String(payload.created) : payloadFingerprint(payload)
+    payload.created != null
+      ? String(payload.created)
+      : payloadFingerprint(payload)
 
   return createHash("sha256")
     .update(`${type}|${orderId}|${discriminator}|${timeKey}`)
@@ -305,6 +333,7 @@ Refs #2"
 ## Task 3: Order state action planner
 
 **Files:**
+
 - Create: `src/utils/order-state.ts`
 - Test: `tests/order-state.test.ts`
 
@@ -337,7 +366,10 @@ describe("planOrderStateActions", () => {
       ],
     }
     const plan = planOrderStateActions(order, [])
-    expect(plan.shipments.map((s) => s.printful_shipment_id)).toEqual(["1", "2"])
+    expect(plan.shipments.map((s) => s.printful_shipment_id)).toEqual([
+      "1",
+      "2",
+    ])
     expect(plan.shipments[0].tracking_number).toBe("A1")
   })
 
@@ -371,13 +403,21 @@ describe("planOrderStateActions", () => {
   })
 
   it("flags canceled and onhold as needing attention", () => {
-    expect(planOrderStateActions({ ...base, status: "canceled" }, []).needsAttention).toBe(true)
-    expect(planOrderStateActions({ ...base, status: "onhold" }, []).needsAttention).toBe(true)
+    expect(
+      planOrderStateActions({ ...base, status: "canceled" }, []).needsAttention
+    ).toBe(true)
+    expect(
+      planOrderStateActions({ ...base, status: "onhold" }, []).needsAttention
+    ).toBe(true)
   })
 
   it("does not flag ordinary in-progress states", () => {
-    expect(planOrderStateActions({ ...base, status: "inprocess" }, []).needsAttention).toBe(false)
-    expect(planOrderStateActions({ ...base, status: "fulfilled" }, []).needsAttention).toBe(false)
+    expect(
+      planOrderStateActions({ ...base, status: "inprocess" }, []).needsAttention
+    ).toBe(false)
+    expect(
+      planOrderStateActions({ ...base, status: "fulfilled" }, []).needsAttention
+    ).toBe(false)
   })
 
   it("carries shipment details into metadata", () => {
@@ -385,12 +425,26 @@ describe("planOrderStateActions", () => {
       ...base,
       status: "fulfilled",
       shipments: [
-        { id: 3, carrier: "UPS", service: "Ground", tracking_number: "C3", tracking_url: "http://t/C3", ship_date: "2026-07-31" },
+        {
+          id: 3,
+          carrier: "UPS",
+          service: "Ground",
+          tracking_number: "C3",
+          tracking_url: "http://t/C3",
+          ship_date: "2026-07-31",
+        },
       ],
     }
     const meta = planOrderStateActions(order, []).metadata
     expect(meta.printful_shipments).toEqual([
-      { id: "3", carrier: "UPS", service: "Ground", tracking_number: "C3", tracking_url: "http://t/C3", ship_date: "2026-07-31" },
+      {
+        id: "3",
+        carrier: "UPS",
+        service: "Ground",
+        tracking_number: "C3",
+        tracking_url: "http://t/C3",
+        ship_date: "2026-07-31",
+      },
     ])
   })
 })
@@ -487,6 +541,7 @@ Refs #2"
 ## Task 4: Webhook config types and client methods
 
 **Files:**
+
 - Modify: `src/utils/types.ts`
 - Modify: `src/utils/printful-client.ts`
 - Test: `tests/printful-client.test.ts`
@@ -496,59 +551,67 @@ Refs #2"
 Append inside the existing `describe("PrintfulClient", ...)` block in `tests/printful-client.test.ts`:
 
 ```typescript
-  it("reads the webhook config", async () => {
-    const fetchImpl = vi.fn().mockResolvedValue(
-      jsonResponse({
-        code: 200,
-        result: { url: "https://shop.test/hooks/printful/tok", types: ["package_shipped"] },
-      })
+it("reads the webhook config", async () => {
+  const fetchImpl = vi.fn().mockResolvedValue(
+    jsonResponse({
+      code: 200,
+      result: {
+        url: "https://shop.test/hooks/printful/tok",
+        types: ["package_shipped"],
+      },
+    })
+  )
+  const client = new PrintfulClient({
+    apiToken: "token",
+    fetchImpl: fetchImpl as unknown as typeof fetch,
+    maxRetries: 0,
+  })
+
+  const config = await client.getWebhookConfig()
+
+  expect(config.url).toBe("https://shop.test/hooks/printful/tok")
+  expect(config.types).toEqual(["package_shipped"])
+  expect(String(fetchImpl.mock.calls[0][0])).toContain("/webhooks")
+})
+
+it("replaces the whole webhook config on set", async () => {
+  const fetchImpl = vi.fn().mockResolvedValue(
+    jsonResponse({
+      code: 200,
+      result: { url: "https://shop.test/h", types: ["order_failed"] },
+    })
+  )
+  const client = new PrintfulClient({
+    apiToken: "token",
+    fetchImpl: fetchImpl as unknown as typeof fetch,
+    maxRetries: 0,
+  })
+
+  await client.setWebhookConfig("https://shop.test/h", ["order_failed"])
+
+  const [, init] = fetchImpl.mock.calls[0]
+  expect(init.method).toBe("POST")
+  const body = JSON.parse(init.body as string)
+  expect(body.url).toBe("https://shop.test/h")
+  expect(body.types).toEqual(["order_failed"])
+})
+
+it("disables the webhook config", async () => {
+  const fetchImpl = vi
+    .fn()
+    .mockResolvedValue(
+      jsonResponse({ code: 200, result: { url: null, types: [] } })
     )
-    const client = new PrintfulClient({
-      apiToken: "token",
-      fetchImpl: fetchImpl as unknown as typeof fetch,
-      maxRetries: 0,
-    })
-
-    const config = await client.getWebhookConfig()
-
-    expect(config.url).toBe("https://shop.test/hooks/printful/tok")
-    expect(config.types).toEqual(["package_shipped"])
-    expect(String(fetchImpl.mock.calls[0][0])).toContain("/webhooks")
+  const client = new PrintfulClient({
+    apiToken: "token",
+    fetchImpl: fetchImpl as unknown as typeof fetch,
+    maxRetries: 0,
   })
 
-  it("replaces the whole webhook config on set", async () => {
-    const fetchImpl = vi.fn().mockResolvedValue(
-      jsonResponse({ code: 200, result: { url: "https://shop.test/h", types: ["order_failed"] } })
-    )
-    const client = new PrintfulClient({
-      apiToken: "token",
-      fetchImpl: fetchImpl as unknown as typeof fetch,
-      maxRetries: 0,
-    })
+  await client.disableWebhook()
 
-    await client.setWebhookConfig("https://shop.test/h", ["order_failed"])
-
-    const [, init] = fetchImpl.mock.calls[0]
-    expect(init.method).toBe("POST")
-    const body = JSON.parse(init.body as string)
-    expect(body.url).toBe("https://shop.test/h")
-    expect(body.types).toEqual(["order_failed"])
-  })
-
-  it("disables the webhook config", async () => {
-    const fetchImpl = vi
-      .fn()
-      .mockResolvedValue(jsonResponse({ code: 200, result: { url: null, types: [] } }))
-    const client = new PrintfulClient({
-      apiToken: "token",
-      fetchImpl: fetchImpl as unknown as typeof fetch,
-      maxRetries: 0,
-    })
-
-    await client.disableWebhook()
-
-    expect(fetchImpl.mock.calls[0][1].method).toBe("DELETE")
-  })
+  expect(fetchImpl.mock.calls[0][1].method).toBe("DELETE")
+})
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -620,6 +683,7 @@ Refs #2"
 ## Task 5: Event model and migration
 
 **Files:**
+
 - Create: `src/modules/printful/models/printful-webhook-event.ts`
 - Create: `src/modules/printful/migrations/Migration20260731000000.ts`
 
@@ -751,6 +815,7 @@ Refs #2"
 ## Task 6: Service methods for events and locking
 
 **Files:**
+
 - Modify: `src/modules/printful/service.ts`
 
 - [ ] **Step 1: Add the methods**
@@ -861,7 +926,11 @@ Add `import { createHash } from "crypto"` at the top of the file.
 Append to `tests/order-link.test.ts`:
 
 ```typescript
-import { MAX_WEBHOOK_ATTEMPTS, lockKeyFor, nextRetryDelayMs } from "../src/modules/printful/service"
+import {
+  MAX_WEBHOOK_ATTEMPTS,
+  lockKeyFor,
+  nextRetryDelayMs,
+} from "../src/modules/printful/service"
 
 describe("nextRetryDelayMs", () => {
   it("starts at five minutes", () => {
@@ -927,6 +996,7 @@ Refs #2"
 ## Task 7: Apply-order-status workflow
 
 **Files:**
+
 - Create: `src/workflows/apply-order-status.ts`
 - Modify: `src/workflows/index.ts`
 
@@ -987,7 +1057,9 @@ const applyStep = createStep(
       next_retry_at: new Date(Date.now() + nextRetryDelayMs(attempts)),
     })
 
-    const link = await printful.findOrderLinkByPrintfulId(event.printful_order_id)
+    const link = await printful.findOrderLinkByPrintfulId(
+      event.printful_order_id
+    )
     if (!link) {
       // The order link is written on payment.captured; a webhook can beat it.
       const status = attempts >= MAX_WEBHOOK_ATTEMPTS ? "failed" : "deferred"
@@ -1012,7 +1084,10 @@ const applyStep = createStep(
       })
 
       const recorded = (order.fulfillments ?? [])
-        .map((f) => (f.data as Record<string, unknown> | null)?.printful_shipment_id)
+        .map(
+          (f) =>
+            (f.data as Record<string, unknown> | null)?.printful_shipment_id
+        )
         .filter((v): v is string => typeof v === "string")
 
       const plan = planOrderStateActions(pfOrder, recorded)
@@ -1118,6 +1193,7 @@ Refs #2"
 ## Task 8: Public webhook route
 
 **Files:**
+
 - Create: `src/api/hooks/printful/[token]/route.ts`
 
 - [ ] **Step 1: Create the route**
@@ -1180,7 +1256,9 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
 
     // Redelivery of an event we already hold: absorb it.
     if (!event) {
-      res.status(200).json({ received: true, event_id: eventId, duplicate: true })
+      res
+        .status(200)
+        .json({ received: true, event_id: eventId, duplicate: true })
       return
     }
 
@@ -1229,6 +1307,7 @@ Refs #2"
 ## Task 9: Route integration tests
 
 **Files:**
+
 - Create: `tests/webhook-route.integration.test.ts`
 
 These require a database. If `DATABASE_URL` is unset the suite skips rather than
@@ -1247,7 +1326,12 @@ const shippedPayload = {
   created: 1735689600,
   data: {
     order: { id: 777 },
-    shipment: { id: 5001, carrier: "USPS", service: "Priority", tracking_number: "1Z999" },
+    shipment: {
+      id: 5001,
+      carrier: "USPS",
+      service: "Priority",
+      tracking_number: "1Z999",
+    },
   },
 }
 
@@ -1275,8 +1359,14 @@ medusaIntegrationTestRunner({
       })
 
       it("absorbs a redelivered event without a second row", async () => {
-        const first = await api.post(`/hooks/printful/${SECRET}`, shippedPayload)
-        const second = await api.post(`/hooks/printful/${SECRET}`, shippedPayload)
+        const first = await api.post(
+          `/hooks/printful/${SECRET}`,
+          shippedPayload
+        )
+        const second = await api.post(
+          `/hooks/printful/${SECRET}`,
+          shippedPayload
+        )
 
         expect(second.status).toBe(200)
         expect(second.data.duplicate).toBe(true)
@@ -1383,6 +1473,7 @@ Refs #2"
 ## Task 9b: Verification-first integration test
 
 **Files:**
+
 - Modify: `tests/webhook-route.integration.test.ts`
 
 This is the security core of the release: a forged payload must not be able to
@@ -1394,48 +1485,48 @@ holding, the entire trust model is gone.
 Append inside the `describe("POST /hooks/printful/:token", ...)` block:
 
 ```typescript
-      it("ignores a payload that lies about the status", async () => {
-        // The payload claims the order shipped. The Printful API — the only
-        // source we trust — still reports it pending, so nothing may be created.
-        const printful = getContainer().resolve("printful")
-        const client = await printful.getClient()
-        const originalGetOrder = client.getOrder.bind(client)
-        client.getOrder = async () => ({ id: 4242, status: "pending", shipments: [] })
+it("ignores a payload that lies about the status", async () => {
+  // The payload claims the order shipped. The Printful API — the only
+  // source we trust — still reports it pending, so nothing may be created.
+  const printful = getContainer().resolve("printful")
+  const client = await printful.getClient()
+  const originalGetOrder = client.getOrder.bind(client)
+  client.getOrder = async () => ({ id: 4242, status: "pending", shipments: [] })
 
-        try {
-          const res = await api.post(`/hooks/printful/${SECRET}`, {
-            type: "package_shipped",
-            created: 4242,
-            data: {
-              order: { id: 4242 },
-              shipment: { id: 90001, tracking_number: "FORGED" },
-            },
-          })
-          expect(res.status).toBe(200)
+  try {
+    const res = await api.post(`/hooks/printful/${SECRET}`, {
+      type: "package_shipped",
+      created: 4242,
+      data: {
+        order: { id: 4242 },
+        shipment: { id: 90001, tracking_number: "FORGED" },
+      },
+    })
+    expect(res.status).toBe(200)
 
-          await new Promise((r) => setTimeout(r, 1000))
+    await new Promise((r) => setTimeout(r, 1000))
 
-          const stored = await printful.findWebhookEvent(res.data.event_id)
-          expect(stored).toBeTruthy()
+    const stored = await printful.findWebhookEvent(res.data.event_id)
+    expect(stored).toBeTruthy()
 
-          // No fulfillment may reference the forged shipment id.
-          const link = await printful.findOrderLinkByPrintfulId("4242")
-          if (link) {
-            const orderModule = getContainer().resolve("order")
-            const order = await orderModule.retrieveOrder(link.medusa_order_id, {
-              relations: ["fulfillments"],
-            })
-            const forged = (order.fulfillments ?? []).filter(
-              (f) =>
-                (f.data as Record<string, unknown> | null)
-                  ?.printful_shipment_id === "90001"
-            )
-            expect(forged).toHaveLength(0)
-          }
-        } finally {
-          client.getOrder = originalGetOrder
-        }
+    // No fulfillment may reference the forged shipment id.
+    const link = await printful.findOrderLinkByPrintfulId("4242")
+    if (link) {
+      const orderModule = getContainer().resolve("order")
+      const order = await orderModule.retrieveOrder(link.medusa_order_id, {
+        relations: ["fulfillments"],
       })
+      const forged = (order.fulfillments ?? []).filter(
+        (f) =>
+          (f.data as Record<string, unknown> | null)?.printful_shipment_id ===
+          "90001"
+      )
+      expect(forged).toHaveLength(0)
+    }
+  } finally {
+    client.getOrder = originalGetOrder
+  }
+})
 ```
 
 - [ ] **Step 2: Run the integration suite**
@@ -1457,6 +1548,7 @@ Refs #2"
 ## Task 10: Retry job
 
 **Files:**
+
 - Create: `src/jobs/retry-webhook-events.ts`
 
 - [ ] **Step 1: Create the job**
@@ -1532,6 +1624,7 @@ Refs #2"
 ## Task 11: Admin webhook config route and order widget
 
 **Files:**
+
 - Create: `src/api/admin/printful/webhook/route.ts`
 - Create: `src/admin/widgets/printful-order-widget.tsx`
 
@@ -1564,7 +1657,8 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
 
   if (!options.webhookSecret) {
     res.status(400).json({
-      message: "Set the webhookSecret plugin option before registering a webhook",
+      message:
+        "Set the webhookSecret plugin option before registering a webhook",
     })
     return
   }
@@ -1578,7 +1672,9 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
   const url = `${body.base_url.replace(/\/$/, "")}/hooks/printful/${options.webhookSecret}`
 
   // Printful keeps one config per store, so this replaces the whole allowlist.
-  const updated = await client.setWebhookConfig(url, [...PRINTFUL_WEBHOOK_TYPES])
+  const updated = await client.setWebhookConfig(url, [
+    ...PRINTFUL_WEBHOOK_TYPES,
+  ])
 
   res.status(200).json({ current: updated })
 }
@@ -1688,6 +1784,7 @@ Refs #2"
 ## Task 12: Documentation and full verification
 
 **Files:**
+
 - Modify: `README.md`
 - Modify: `CHANGELOG.md`
 - Modify: `package.json`
@@ -1704,9 +1801,10 @@ Medusa Admin (Products list → Printful → Webhooks) or by calling
 `POST /admin/printful/webhook` with your public base URL.
 
 The endpoint Printful will call is:
-
 ```
+
 https://<your-store>/hooks/printful/<webhookSecret>
+
 ```
 
 Printful keeps **one webhook configuration per store**, so registering replaces

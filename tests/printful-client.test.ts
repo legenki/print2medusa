@@ -157,17 +157,15 @@ describe("PrintfulClient", () => {
   })
 
   it("throws non-retryable 400 without endless retries", async () => {
-    const fetchImpl = vi
-      .fn()
-      .mockResolvedValue(
-        jsonResponse(
-          {
-            code: 400,
-            error: { message: "bad request", reason: "BadRequest" },
-          },
-          400
-        )
+    const fetchImpl = vi.fn().mockResolvedValue(
+      jsonResponse(
+        {
+          code: 400,
+          error: { message: "bad request", reason: "BadRequest" },
+        },
+        400
       )
+    )
 
     const client = new PrintfulClient({
       apiToken: "token",

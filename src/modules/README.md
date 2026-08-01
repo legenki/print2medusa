@@ -35,8 +35,7 @@ import Post from "./models/post"
 
 class BlogModuleService extends MedusaService({
   Post,
-}){
-}
+}) {}
 
 export default BlogModuleService
 ```
@@ -81,14 +80,12 @@ export async function GET(
   req: MedusaRequest,
   res: MedusaResponse
 ): Promise<void> {
-  const blogModuleService: BlogModuleService = req.scope.resolve(
-    BLOG_MODULE
-  )
+  const blogModuleService: BlogModuleService = req.scope.resolve(BLOG_MODULE)
 
   const posts = await blogModuleService.listPosts()
 
   res.json({
-    posts
+    posts,
   })
 }
 ```
