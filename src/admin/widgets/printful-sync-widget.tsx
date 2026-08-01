@@ -17,10 +17,25 @@ type SyncStatus = {
   } | null
 }
 
+type WebhookConfig = {
+  url: string | null
+  types: string[]
+}
+
+type WebhookStatus = {
+  current: WebhookConfig
+  configured_types: readonly string[]
+  secret_set: boolean
+}
+
 const PrintfulSyncWidget = () => {
   const [status, setStatus] = useState<SyncStatus | null>(null)
   const [loading, setLoading] = useState(false)
   const [syncing, setSyncing] = useState(false)
+
+  const [webhook, setWebhook] = useState<WebhookStatus | null>(null)
+  const [webhookLoading, setWebhookLoading] = useState(false)
+  const [registering, setRegistering] = useState(false)
 
   const loadStatus = async () => {
     setLoading(true)
@@ -41,9 +56,56 @@ const PrintfulSyncWidget = () => {
     }
   }
 
+  const loadWebhook = async () => {
+    setWebhookLoading(true)
+    try {
+      const res = await fetch("/admin/printful/webhook", {
+        credentials: "include",
+      })
+      if (!res.ok) {
+        throw new Error(`Status ${res.status}`)
+      }
+      const data = (await res.json()) as WebhookStatus
+      setWebhook(data)
+    } catch (e) {
+      // Widget may load before routes are registered
+      console.error(e)
+    } finally {
+      setWebhookLoading(false)
+    }
+  }
+
   useEffect(() => {
     void loadStatus()
+    void loadWebhook()
   }, [])
+
+  const onRegisterWebhook = async () => {
+    setRegistering(true)
+    try {
+      const res = await fetch("/admin/printful/webhook", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ base_url: window.location.origin }),
+      })
+      if (!res.ok) {
+        const text = await res.text()
+        throw new Error(text || `Registration failed (${res.status})`)
+      }
+      toast.success("Printful webhook registered", {
+        description:
+          "The new configuration replaced any previous Printful webhook.",
+      })
+      await loadWebhook()
+    } catch (e) {
+      toast.error("Failed to register webhook", {
+        description: e instanceof Error ? e.message : String(e),
+      })
+    } finally {
+      setRegistering(false)
+    }
+  }
 
   const onSync = async () => {
     setSyncing(true)
@@ -122,6 +184,55 @@ const PrintfulSyncWidget = () => {
         ) : (
           <Text size="small" className="text-ui-fg-subtle">
             No sync runs yet.
+          </Text>
+        )}
+      </div>
+      <div className="px-6 py-4 flex flex-col gap-2">
+        <div className="flex items-center justify-between">
+          <Heading level="h3">Webhook</Heading>
+          <Button
+            size="small"
+            variant="secondary"
+            onClick={() => void onRegisterWebhook()}
+            isLoading={registering}
+            disabled={webhookLoading || registering || !webhook?.secret_set}
+          >
+            Register webhook
+          </Button>
+        </div>
+        <Text size="small" className="text-ui-fg-subtle">
+          Printful allows only one webhook configuration per store.
+          Registering replaces any existing Printful webhook URL and event
+          list — including one set up by another integration or a previous
+          install of this plugin.
+        </Text>
+        {webhookLoading && !webhook ? (
+          <Text size="small">Loading webhook configuration…</Text>
+        ) : webhook ? (
+          <>
+            <Text size="small">
+              Current URL:{" "}
+              <strong>{webhook.current.url ?? "Not configured"}</strong>
+            </Text>
+            <Text size="small" className="text-ui-fg-subtle">
+              Current events:{" "}
+              {webhook.current.types.length > 0
+                ? webhook.current.types.join(", ")
+                : "None"}
+            </Text>
+            <Text size="small" className="text-ui-fg-subtle">
+              Will register: {webhook.configured_types.join(", ")}
+            </Text>
+            {!webhook.secret_set ? (
+              <Text size="small" className="text-ui-fg-error">
+                Set the webhookSecret plugin option before registering a
+                webhook.
+              </Text>
+            ) : null}
+          </>
+        ) : (
+          <Text size="small" className="text-ui-fg-subtle">
+            Unable to load webhook configuration.
           </Text>
         )}
       </div>
