@@ -96,9 +96,7 @@ class PrintfulFulfillmentProviderService extends AbstractFulfillmentProviderServ
     data: Record<string, unknown>,
     items: Partial<Omit<FulfillmentItemDTO, "fulfillment">>[],
     order: Partial<FulfillmentOrderDTO> | undefined,
-    fulfillment: Partial<
-      Omit<FulfillmentDTO, "provider_id" | "data" | "items">
-    >
+    fulfillment: Partial<Omit<FulfillmentDTO, "provider_id" | "data" | "items">>
   ): Promise<CreateFulfillmentResult> {
     // Prefer order created by payment.captured subscriber; attach id if present.
     const existingId =

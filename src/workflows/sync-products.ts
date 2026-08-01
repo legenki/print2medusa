@@ -248,10 +248,7 @@ const syncProductsStep = createStep(
 
 const finalizeSyncLogStep = createStep(
   "printful-finalize-sync-log",
-  async (
-    input: { logId: string; counters: SyncCounters },
-    { container }
-  ) => {
+  async (input: { logId: string; counters: SyncCounters }, { container }) => {
     const printful: PrintfulModuleService = container.resolve(PRINTFUL_MODULE)
     const failedHard =
       input.counters.failed > 0 &&

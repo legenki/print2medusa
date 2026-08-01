@@ -1,4 +1,7 @@
-export { default as syncProductsWorkflow, syncProductsWorkflow as syncProducts } from "./sync-products"
+export {
+  default as syncProductsWorkflow,
+  syncProductsWorkflow as syncProducts,
+} from "./sync-products"
 export type { SyncProductsInput } from "./sync-products"
 export {
   default as createPrintfulOrderWorkflow,

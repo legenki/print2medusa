@@ -152,9 +152,7 @@ describe("diffVariantsForUpsert", () => {
   })
 
   it("does not match existing variants lacking a sync id", () => {
-    const existing = [
-      { id: "var_x", metadata: {}, prices: [] },
-    ]
+    const existing = [{ id: "var_x", metadata: {}, prices: [] }]
     const { toCreate, toUpdate } = diffVariantsForUpsert(mapped, existing)
     expect(toUpdate).toHaveLength(0)
     expect(toCreate).toHaveLength(2)

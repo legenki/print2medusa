@@ -17,7 +17,9 @@ describe("PrintfulClient", () => {
     const fetchImpl = vi.fn().mockResolvedValue(
       jsonResponse({
         code: 200,
-        result: [{ id: 1, name: "Tee", external_id: null, variants: 2, synced: 2 }],
+        result: [
+          { id: 1, name: "Tee", external_id: null, variants: 2, synced: 2 },
+        ],
         paging: { total: 1, offset: 0, limit: 100 },
       })
     )
@@ -118,7 +120,11 @@ describe("PrintfulClient", () => {
       .fn()
       .mockResolvedValueOnce(
         jsonResponse(
-          { code: 429, result: "rate limited", error: { message: "slow down" } },
+          {
+            code: 429,
+            result: "rate limited",
+            error: { message: "slow down" },
+          },
           429
         )
       )
@@ -151,12 +157,17 @@ describe("PrintfulClient", () => {
   })
 
   it("throws non-retryable 400 without endless retries", async () => {
-    const fetchImpl = vi.fn().mockResolvedValue(
-      jsonResponse(
-        { code: 400, error: { message: "bad request", reason: "BadRequest" } },
-        400
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValue(
+        jsonResponse(
+          {
+            code: 400,
+            error: { message: "bad request", reason: "BadRequest" },
+          },
+          400
+        )
       )
-    )
 
     const client = new PrintfulClient({
       apiToken: "token",

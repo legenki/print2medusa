@@ -106,7 +106,9 @@ const createPrintfulOrderStep = createStep(
 
     const countryCode = (addr.country_code || "").toUpperCase()
     const recipient: PrintfulRecipient = {
-      name: [addr.first_name, addr.last_name].filter(Boolean).join(" ") || "Customer",
+      name:
+        [addr.first_name, addr.last_name].filter(Boolean).join(" ") ||
+        "Customer",
       address1: addr.address_1 || "",
       address2: addr.address_2 || undefined,
       city: addr.city || "",
