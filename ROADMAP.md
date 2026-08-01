@@ -7,17 +7,17 @@ plugin in a working state. The testing strategy tightens as the API surface grow
 
 ## Where we are
 
-|                       |                         |
-| --------------------- | ----------------------- |
-| Published version     | `0.1.0`                 |
-| Tests                 | 23                      |
-| Printful API coverage | 3 of 15 endpoint groups |
-| Test layers           | unit only               |
+|                       |                                          |
+| --------------------- | ---------------------------------------- |
+| Published version     | `0.2.0`                                  |
+| Tests                 | 113 (100 unit, 13 integration)           |
+| Printful API coverage | 5 of 15 endpoint groups                  |
+| Test layers           | unit + integration against real Postgres |
 
-The plugin uses three endpoints: `/store/products`, `/orders`, and order
-cancellation. Out of the fifteen groups Printful exposes that is a narrow band —
-almost everything that makes print-on-demand manageable (live shipping rates,
-tracking, webhooks, taxes, mockups) is not wired up yet.
+The plugin covers products, orders, order cancellation, webhook configuration,
+and order status. Out of the fifteen groups Printful exposes that is still a
+narrow band — live shipping rates, stock, taxes, and mockups remain unwired, and
+each is a release below.
 
 ---
 
@@ -31,38 +31,47 @@ mappers (prices, markup, options, ISO state codes), order-claim uniqueness guard
 
 ---
 
-## 0.2.0 — Webhooks and order status `next`
+## 0.2.0 — Webhooks and order status `shipped`
 
-Today the link is one-way: we push an order to Printful and forget about it. The
-customer never learns that the parcel shipped. This is the most visible gap.
+The link was one-way: we pushed an order to Printful and never heard back, so a
+customer was never told their parcel shipped. Now Printful's state flows back.
 
 ### API surface
 
-| Endpoint           | Purpose                                      |
-| ------------------ | -------------------------------------------- |
-| `POST /webhooks`   | Register the callback URL and event list     |
-| `GET /webhooks`    | Inspect the current configuration            |
-| `GET /orders/{id}` | Status reconciliation (fallback to webhooks) |
+| Endpoint           | Purpose                                  |
+| ------------------ | ---------------------------------------- |
+| `POST /webhooks`   | Register the callback URL and event list |
+| `GET /webhooks`    | Inspect the current configuration        |
+| `DELETE /webhooks` | Disable webhook delivery                 |
+| `GET /orders/{id}` | The authoritative state for every event  |
 
-### Scope
+### What shipped
 
-- Public route `POST /printful/webhook` with signature verification (v1 uses the
-  already-reserved `webhookSecret` option)
-- Handle `package_shipped`, `order_failed`, `order_canceled`, `order_put_hold`
-- Create a Medusa `Fulfillment` carrying the tracking number and carrier URL on shipment
-- New `printful_webhook_event` model — an inbound event log for idempotency and incident triage
-- Admin widget on the order page: Printful status, tracking, "Resync" action
+- Public route `POST /hooks/printful/:token`, authenticated by a path secret —
+  Printful v1 accepts only a URL, with no header support, so the secret must
+  travel in the path
+- Handles `package_shipped`, `order_failed`, `order_canceled`, `package_returned`
+- A Medusa fulfillment and shipment **per parcel**, carrying tracking; Printful
+  splits orders across facilities, so each parcel covers only its own line items
+- `printful_webhook_event` log keyed by a derived `event_id` under a unique index
+- Scheduled retry every 5 minutes for events that arrive before their order link
+- Admin order widget with status and per-parcel tracking; webhook config route
 
-### Testing — unit + route integration
+### Testing — unit + integration against real Postgres
 
-- **Unit:** signature verification (valid, tampered, missing, replayed), payload parsing per event
-- **Idempotency:** the same `event_id` twice produces one Fulfillment — Printful redelivers webhooks by design
-- **Integration:** `medusaIntegrationTestRunner` performs a real HTTP POST against the route and asserts the database write
-- **Ordering:** `shipped` arriving before `created` must not throw; the event parks until it can be applied
+- **Verification-first:** a payload claiming `shipped` while the API reports
+  `pending` creates nothing. Printful v1 does not sign webhooks, so the payload
+  is only a trigger and every decision comes from `GET /orders/{id}`
+- **Idempotency:** the same `event_id` twice yields one row and one fulfillment
+- **Filter operators:** `$in` / `$lte` / `$lt` in the retry query verified against
+  real SQL, since typecheck cannot see them
+- `medusaIntegrationTestRunner` proved unusable here — it boots a full app from a
+  root `medusa-config.ts`, which a plugin repo does not have. The suite drives
+  the service and route directly against a real database instead
 
 ---
 
-## 0.3.0 — Live shipping rates
+## 0.3.0 — Live shipping rates `next`
 
 `canCalculate` currently returns `false`, so shipping is set by hand and
 international orders either lose money or overcharge. Printful computes the exact

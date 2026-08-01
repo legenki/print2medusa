@@ -83,12 +83,16 @@ See `examples/basic-store/` for a fuller snippet.
 | Orders               | On `payment.captured` → creates Printful order with **`sync_variant_id`**                             |
 | Fulfillment provider | Select Printful shipping option in Admin locations                                                    |
 | Status               | `GET /admin/printful/status` + product list widget                                                    |
+| Shipment tracking    | Printful webhooks → Medusa fulfillment + shipment per parcel, with tracking                           |
+| Order visibility     | Printful status and per-parcel tracking on the Admin order page                                       |
 
 ### Idempotency
 
 - Re-sync updates existing products via link tables (no duplicates) and **upserts variants** — price and assortment changes in Printful reach Medusa; manually-added Medusa variants are left untouched.
 - Concurrent / re-fired payment events will not create a second Printful order: the order is **claimed insert-first** via a unique index on `printful_order_link.medusa_order_id` before the Printful API is called.
 - Shipping `province` is normalized to the 2-letter `state_code` Printful expects for US/CA.
+- Printful redelivers webhooks by design. Each event is stored under a **derived `event_id`** carrying a unique index, so a redelivery is absorbed rather than producing a second fulfillment. Delivery metadata (`retries`, `store`) is excluded from that id — otherwise the same event would hash differently on each attempt.
+- Events for one order are **serialized with a transaction-scoped advisory lock**, so two events cannot both pass the "shipment not yet recorded" check and each create a fulfillment for one parcel.
 
 ## Webhooks
 
