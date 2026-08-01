@@ -1,0 +1,12 @@
+# Build output
+.medusa
+dist
+build
+coverage
+.cache
+
+# Dependencies
+node_modules
+
+# Lockfiles
+package-lock.json
