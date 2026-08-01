@@ -49,6 +49,20 @@ of both values, so differing lengths cannot throw and timing cannot leak the sec
 **Logging rule:** never log the full URL, path, or token. Log the derived
 `event_id` and `printful_order_id` only.
 
+The route's own discipline is not enough. Medusa's error handler logs
+`` `Error ${err.statusCode} at ${req.path}` `` for anything that reaches it, and
+our path carries the secret — so a body-parser 413 or 400 on a genuine Printful
+delivery would write the live token to the log in cleartext. A middleware on
+`/hooks/printful/*` redacts the token segment from `req.path` before any
+downstream handler or the error middleware can read it.
+
+A header would avoid this entirely, but Printful v1 cannot send one: the webhook
+configuration accepts only `url`, `types`, and `params`, and `params` is
+per-event filtering (e.g. `product_ids` for `stock_updated`), not headers. The
+path is the only channel available, so the secret is mitigated rather than
+relocated. Operators should also expect it in reverse-proxy and CDN access logs,
+and rotate it accordingly — the README says so.
+
 ### Response contract
 
 | Condition | Status | Body |
