@@ -231,9 +231,34 @@ facilities routinely, so each `package_shipped` maps to its own
 fulfillment + shipment covering that parcel's items — never one fulfillment that
 closes the whole order.
 
-Shipment items are matched to Medusa line items through
-`printful_variant_link.printful_sync_variant_id`, the same mapping used when the
-order was created.
+Passing the order-wide item list to every fulfillment is not an option: Medusa
+rejects it. `fulfill-item.js` throws `Cannot fulfill more items than what was
+ordered` once `fulfilled_quantity` reaches `quantity`, so parcel 1 would consume
+the whole order and parcel 2 would fail on every attempt — burning all 20 retries
+while parcel 1's fulfillment stays committed.
+
+Per-parcel items come from Printful: `Shipment.items` is an array of
+`OrderShipmentItem { item_id, quantity, picked, printed }` (confirmed in the v1
+OpenAPI spec). `item_id` is the Printful line item id, which maps back to Medusa
+through the `external_id` we set on every Printful order item when the order was
+created. Quantities are clamped against what Medusa still has unfulfilled —
+Printful reports reshipments (`reshipment: true`) and can exceed the open
+quantity after a partial cancel.
+
+### When the apply step throws
+
+Every failure path must leave a record. An unhandled throw is worse than a
+failure, because the event ends up in a state no process owns:
+
+- `error_message` stays empty, so there is nothing to diagnose from
+- `status` remains `received`/`deferred`, which reads as "not yet processed"
+- once `attempts` reaches the cap, the row stops matching the retry query —
+  invisible to the job, yet indistinguishable from a fresh event
+
+So the apply step wraps its work and, on any exception, writes `error_message`
+and sets `status` to `deferred` (or `failed` at the cap) before rethrowing. That
+write happens **outside** the order lock: a write inside the lock transaction
+would roll back with it, destroying the only evidence of what went wrong.
 
 ### Metadata written to the order
 
