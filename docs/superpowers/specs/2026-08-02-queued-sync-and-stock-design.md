@@ -203,6 +203,15 @@ The rules follow from that marker:
 - **Never touch** a draft product with no marker. The merchant drafted it, and
   its publication state is theirs to decide
 
+**The marker is written only on a `published → draft` transition the plugin
+performs**, never onto a product that is already draft. Marking an
+already-drafted product looks harmless, since the status does not change — but
+it plants a false claim of ownership. On the next restock the plugin would see
+its own marker and publish a product the merchant deliberately hid, which is the
+exact override the marker exists to prevent. The failure is latent by a full
+sync cycle, which is why it belongs here as a rule rather than being left to
+judgment at the call site.
+
 A merchant who manually publishes a product the plugin had hidden leaves a stale
 marker behind. That is harmless: the next sync sees the product published and
 either clears the marker on restock or re-unpublishes it if it is genuinely
