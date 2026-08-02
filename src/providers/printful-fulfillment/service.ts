@@ -458,13 +458,16 @@ class PrintfulFulfillmentProviderService extends AbstractFulfillmentProviderServ
 
   private priced(
     amount: number,
-    _methodId: string,
-    _source: RateSource
+    methodId: string,
+    source: RateSource
   ): CalculatedShippingOptionPrice {
     return {
       calculated_amount: amount,
       is_calculated_price_tax_inclusive: false,
-    } as CalculatedShippingOptionPrice
+      // Carried onto the shipping method so order creation knows whether this
+      // price came from a real Printful quote or from a fallback.
+      data: { printful_shipping: methodId, rate_source: source },
+    } as unknown as CalculatedShippingOptionPrice
   }
 
   async createFulfillment(

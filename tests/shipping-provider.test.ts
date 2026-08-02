@@ -481,3 +481,73 @@ describe("calculatePrice", () => {
     expect(logger.warn).toHaveBeenCalled()
   })
 })
+
+describe("rate provenance", () => {
+  it("records the method and source on a live quote", async () => {
+    const { service } = makeProvider({
+      getShippingRates: vi.fn().mockResolvedValue(RATES),
+      query: makeQuery(),
+      cache: makeCache(),
+    })
+
+    const result = (await service.calculatePrice(
+      { id: "STANDARD" } as never,
+      {} as never,
+      CONTEXT
+    )) as unknown as {
+      data?: { printful_shipping?: string; rate_source?: string }
+    }
+
+    expect(result.data?.printful_shipping).toBe("STANDARD")
+    expect(result.data?.rate_source).toBe("live")
+  })
+
+  it("marks a fallback so the order path can tell it apart", async () => {
+    const { service } = makeProvider({
+      getShippingRates: vi.fn().mockRejectedValue(new Error("ETIMEDOUT")),
+      query: makeQuery(),
+      cache: makeCache(),
+    })
+
+    const result = (await service.calculatePrice(
+      { id: "STANDARD" } as never,
+      {} as never,
+      CONTEXT
+    )) as unknown as { data?: { rate_source?: string } }
+
+    expect(result.data?.rate_source).toBe("flat_fallback")
+  })
+
+  it("marks a stale quote distinctly from a live one", async () => {
+    const cache = makeCache()
+    const getShippingRates = vi
+      .fn()
+      .mockResolvedValueOnce(RATES)
+      .mockRejectedValueOnce(new Error("ETIMEDOUT"))
+    const { service } = makeProvider({
+      getShippingRates,
+      query: makeQuery(),
+      cache,
+    })
+
+    await service.calculatePrice(
+      { id: "STANDARD" } as never,
+      {} as never,
+      CONTEXT
+    )
+    for (const [k, v] of cache._store) {
+      cache._store.set(k, {
+        ...(v as object),
+        cached_at: Date.now() - 60 * 60 * 1000,
+      })
+    }
+
+    const result = (await service.calculatePrice(
+      { id: "STANDARD" } as never,
+      {} as never,
+      CONTEXT
+    )) as unknown as { data?: { rate_source?: string } }
+
+    expect(result.data?.rate_source).toBe("stale_cache")
+  })
+})
