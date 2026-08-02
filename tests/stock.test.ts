@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest"
-import { planStockActions } from "../src/utils/stock"
+import {
+  planStockActions,
+  resolvePublication,
+  STOCK_MARKER_KEY,
+} from "../src/utils/stock"
 
 const variant = (id: number, status?: string) => ({
   id,
@@ -76,5 +80,82 @@ describe("planStockActions", () => {
     const plan = planStockActions([])
     expect(plan.status).toBe("published")
     expect(plan.allUnavailable).toBe(false)
+  })
+})
+
+describe("resolvePublication", () => {
+  it("unpublishes an available-turned-unavailable product and marks it", () => {
+    const result = resolvePublication({
+      plan: { status: "draft", allUnavailable: true } as never,
+      currentStatus: "published",
+      currentMetadata: {},
+    })
+    expect(result.status).toBe("draft")
+    expect(result.metadata[STOCK_MARKER_KEY]).toBe("unavailable")
+    expect(result.changed).toBe(true)
+  })
+
+  it("republishes a product the plugin unpublished, clearing the marker", () => {
+    const result = resolvePublication({
+      plan: { status: "published", allUnavailable: false } as never,
+      currentStatus: "draft",
+      currentMetadata: { [STOCK_MARKER_KEY]: "unavailable" },
+    })
+    expect(result.status).toBe("published")
+    expect(result.metadata[STOCK_MARKER_KEY]).toBeUndefined()
+    expect(result.changed).toBe(true)
+  })
+
+  it("leaves a merchant's draft alone when there is no marker", () => {
+    // The merchant drafted this deliberately — a restock must not undo that.
+    const result = resolvePublication({
+      plan: { status: "published", allUnavailable: false } as never,
+      currentStatus: "draft",
+      currentMetadata: {},
+    })
+    expect(result.status).toBe("draft")
+    expect(result.changed).toBe(false)
+  })
+
+  it("does not touch a published product that is still available", () => {
+    const result = resolvePublication({
+      plan: { status: "published", allUnavailable: false } as never,
+      currentStatus: "published",
+      currentMetadata: {},
+    })
+    expect(result.status).toBe("published")
+    expect(result.changed).toBe(false)
+  })
+
+  it("re-unpublishes a marked product a merchant manually published", () => {
+    // A stale marker is harmless: the product is genuinely unavailable, so
+    // hiding it again is the right outcome.
+    const result = resolvePublication({
+      plan: { status: "draft", allUnavailable: true } as never,
+      currentStatus: "published",
+      currentMetadata: { [STOCK_MARKER_KEY]: "unavailable" },
+    })
+    expect(result.status).toBe("draft")
+    expect(result.changed).toBe(true)
+  })
+
+  it("does not rewrite an already-unpublished marked product", () => {
+    const result = resolvePublication({
+      plan: { status: "draft", allUnavailable: true } as never,
+      currentStatus: "draft",
+      currentMetadata: { [STOCK_MARKER_KEY]: "unavailable" },
+    })
+    expect(result.changed).toBe(false)
+  })
+
+  it("does not mutate the metadata object it was given", () => {
+    const original = { [STOCK_MARKER_KEY]: "unavailable", other: "keep" }
+    const result = resolvePublication({
+      plan: { status: "published", allUnavailable: false } as never,
+      currentStatus: "draft",
+      currentMetadata: original,
+    })
+    expect(original[STOCK_MARKER_KEY]).toBe("unavailable")
+    expect(result.metadata.other).toBe("keep")
   })
 })
