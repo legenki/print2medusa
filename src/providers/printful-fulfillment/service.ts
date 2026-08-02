@@ -1,4 +1,7 @@
-import { AbstractFulfillmentProviderService } from "@medusajs/framework/utils"
+import {
+  AbstractFulfillmentProviderService,
+  MedusaError,
+} from "@medusajs/framework/utils"
 import type {
   CalculatedShippingOptionPrice,
   CalculateShippingOptionPriceContext,
@@ -16,6 +19,8 @@ import {
   buildRateCacheKey,
   buildRateItems,
   isAddressQuotable,
+  LEGACY_OPTION_IDS,
+  PRINTFUL_RETURN_OPTION_ID,
   PRINTFUL_SHIPPING_METHODS,
   selectRate,
 } from "../../utils/shipping-rates"
@@ -138,7 +143,7 @@ class PrintfulFulfillmentProviderService extends AbstractFulfillmentProviderServ
         name: `Printful ${id}`,
       })),
       {
-        id: "PRINTFUL_RETURN",
+        id: PRINTFUL_RETURN_OPTION_ID,
         name: "Printful Return",
         is_return: true,
       },
@@ -146,7 +151,12 @@ class PrintfulFulfillmentProviderService extends AbstractFulfillmentProviderServ
   }
 
   async validateOption(data: Record<string, unknown>): Promise<boolean> {
-    return typeof data?.id === "string" || data?.id == null
+    const id = data?.id
+    return (
+      typeof id === "string" &&
+      ((PRINTFUL_SHIPPING_METHODS as readonly string[]).includes(id) ||
+        id === PRINTFUL_RETURN_OPTION_ID)
+    )
   }
 
   async validateFulfillmentData(
@@ -154,17 +164,32 @@ class PrintfulFulfillmentProviderService extends AbstractFulfillmentProviderServ
     data: Record<string, unknown>,
     _context: Record<string, unknown>
   ): Promise<Record<string, unknown>> {
-    return {
-      ...data,
-      // Defaults to Printful's own first method id rather than the invented
-      // "printful-standard", which matched nothing Printful returns. Keeping
-      // the default in the allowlist means it is always an id `selectRate` can
-      // find in a live quote and `fallbackShippingRates` can be keyed on.
-      printful_option_id: optionData?.id ?? PRINTFUL_SHIPPING_METHODS[0],
+    // Runs when the method is added to the cart, not on every price refresh, so
+    // throwing here does not violate calculatePrice's never-throw constraint.
+    // Inventing a default would record one method on the order while the
+    // customer was priced for another.
+    const id = optionData?.id
+    if (
+      typeof id !== "string" ||
+      !(PRINTFUL_SHIPPING_METHODS as readonly string[]).includes(id)
+    ) {
+      throw new MedusaError(
+        MedusaError.Types.INVALID_DATA,
+        `Printful shipping option has an unrecognized method id ` +
+          `(${JSON.stringify(id)}). Recreate it against one of: ` +
+          `${PRINTFUL_SHIPPING_METHODS.join(", ")}.`
+      )
     }
+    return { ...data, printful_option_id: id }
   }
 
-  async canCalculate(_data: CreateShippingOptionDTO): Promise<boolean> {
+  async canCalculate(data: CreateShippingOptionDTO): Promise<boolean> {
+    const optionId = (data as { data?: { id?: unknown } })?.data?.id
+    // Printful quotes outbound shipping only — a return has no live rate, so
+    // it must be priced flat by the admin rather than resolving to zero.
+    if (optionId === PRINTFUL_RETURN_OPTION_ID) {
+      return false
+    }
     return Boolean(this.options_.liveShippingRates)
   }
 
@@ -436,11 +461,21 @@ class PrintfulFulfillmentProviderService extends AbstractFulfillmentProviderServ
         : undefined
 
     if (flat == null) {
-      this.logger_.error(
-        `No usable fallbackShippingRates entry for "${methodId}" — pricing ` +
-          "shipping at zero. Every method in the allowlist needs a " +
-          "non-negative numeric entry."
-      )
+      // calculatePrice cannot throw, so a legacy option row silently prices at
+      // zero. Naming the id is the only mitigation available.
+      if (LEGACY_OPTION_IDS.has(methodId)) {
+        this.logger_.error(
+          `Shipping option uses the pre-0.3.0 id "${methodId}", which Printful ` +
+            `never returns, so it is pricing at zero. Recreate this option ` +
+            `against one of: ${PRINTFUL_SHIPPING_METHODS.join(", ")}.`
+        )
+      } else {
+        this.logger_.error(
+          `No usable fallbackShippingRates entry for "${methodId}" — pricing ` +
+            "shipping at zero. Every method in the allowlist needs a " +
+            "non-negative numeric entry."
+        )
+      }
       return this.priced(0, methodId, "misconfigured_zero")
     }
 
@@ -463,16 +498,17 @@ class PrintfulFulfillmentProviderService extends AbstractFulfillmentProviderServ
 
   private priced(
     amount: number,
-    methodId: string,
-    source: RateSource
+    _methodId: string,
+    _source: RateSource
   ): CalculatedShippingOptionPrice {
+    // The source is deliberately not returned. Medusa reads only
+    // calculated_amount and is_calculated_price_tax_inclusive off this result
+    // (core-flows add-shipping-method-to-cart.js) — a `data` field here is
+    // discarded, so stamping provenance on it would be silently dead code.
     return {
       calculated_amount: amount,
       is_calculated_price_tax_inclusive: false,
-      // Carried onto the shipping method so order creation knows whether this
-      // price came from a real Printful quote or from a fallback.
-      data: { printful_shipping: methodId, rate_source: source },
-    } as unknown as CalculatedShippingOptionPrice
+    }
   }
 
   async createFulfillment(

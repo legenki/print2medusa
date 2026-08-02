@@ -434,4 +434,19 @@ describe("PRINTFUL_SHIPPING_METHODS", () => {
       expect(fixtureIds).toContain(id)
     }
   })
+
+  it("advertises every method the fixture records", () => {
+    const fixture = JSON.parse(
+      readFileSync(
+        join(__dirname, "fixtures/printful-shipping-rates.json"),
+        "utf8"
+      )
+    ) as { result: Array<{ id: string }> }
+
+    // The reverse direction: a fixture method we do not advertise is a
+    // sellable shipping option quietly lost.
+    for (const id of fixture.result.map((r) => r.id)) {
+      expect(PRINTFUL_SHIPPING_METHODS).toContain(id)
+    }
+  })
 })

@@ -19,6 +19,23 @@ import type {
  */
 export const PRINTFUL_SHIPPING_METHODS = ["STANDARD"] as const
 
+/**
+ * The return option id.
+ *
+ * Not a Printful method id: Printful's rate API quotes outbound shipping only,
+ * so a return has no live rate and must be priced flat by the admin.
+ */
+export const PRINTFUL_RETURN_OPTION_ID = "PRINTFUL_RETURN"
+
+/**
+ * Option ids used before 0.3.0. Printful never returns these, so an option row
+ * surviving the upgrade prices at zero rather than from a live quote.
+ */
+export const LEGACY_OPTION_IDS = new Set([
+  "printful-standard",
+  "printful-return",
+])
+
 export type RateCacheKeyInput = {
   address: ShippingRatesRequest["recipient"]
   items: ShippingRateItem[]

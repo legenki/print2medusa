@@ -480,74 +480,68 @@ describe("calculatePrice", () => {
     expect(cache.set.mock.calls[0][2]).toBe(900)
     expect(logger.warn).toHaveBeenCalled()
   })
-})
 
-describe("rate provenance", () => {
-  it("records the method and source on a live quote", async () => {
-    const { service } = makeProvider({
+  it("names the legacy id when a pre-0.3.0 option prices at zero", async () => {
+    // getFulfillmentOptions no longer lists these, but an option row created
+    // before the upgrade still resolves at checkout — silently, at zero.
+    const { service, logger } = makeProvider({
       getShippingRates: vi.fn().mockResolvedValue(RATES),
       query: makeQuery(),
       cache: makeCache(),
     })
 
-    const result = (await service.calculatePrice(
-      { id: "STANDARD" } as never,
-      {} as never,
-      CONTEXT
-    )) as unknown as {
-      data?: { printful_shipping?: string; rate_source?: string }
-    }
-
-    expect(result.data?.printful_shipping).toBe("STANDARD")
-    expect(result.data?.rate_source).toBe("live")
-  })
-
-  it("marks a fallback so the order path can tell it apart", async () => {
-    const { service } = makeProvider({
-      getShippingRates: vi.fn().mockRejectedValue(new Error("ETIMEDOUT")),
-      query: makeQuery(),
-      cache: makeCache(),
-    })
-
-    const result = (await service.calculatePrice(
-      { id: "STANDARD" } as never,
-      {} as never,
-      CONTEXT
-    )) as unknown as { data?: { rate_source?: string } }
-
-    expect(result.data?.rate_source).toBe("flat_fallback")
-  })
-
-  it("marks a stale quote distinctly from a live one", async () => {
-    const cache = makeCache()
-    const getShippingRates = vi
-      .fn()
-      .mockResolvedValueOnce(RATES)
-      .mockRejectedValueOnce(new Error("ETIMEDOUT"))
-    const { service } = makeProvider({
-      getShippingRates,
-      query: makeQuery(),
-      cache,
-    })
-
-    await service.calculatePrice(
-      { id: "STANDARD" } as never,
+    const result = await service.calculatePrice(
+      { id: "printful-standard" } as never,
       {} as never,
       CONTEXT
     )
-    for (const [k, v] of cache._store) {
-      cache._store.set(k, {
-        ...(v as object),
-        cached_at: Date.now() - 60 * 60 * 1000,
-      })
+
+    expect(result.calculated_amount).toBe(0)
+    const logged = logger.error.mock.calls.map((c) => String(c[0])).join("\n")
+    expect(logged).toContain("pre-0.3.0")
+    expect(logged).toContain("printful-standard")
+    expect(logged).toContain("STANDARD")
+  })
+})
+
+describe("canCalculate", () => {
+  it("refuses live rates for the return option", async () => {
+    const { service } = makeProvider({})
+
+    // Printful quotes outbound shipping only; a live-rated return resolves to
+    // zero, so it must be priced flat by the admin instead.
+    await expect(
+      service.canCalculate({ data: { id: "PRINTFUL_RETURN" } } as never)
+    ).resolves.toBe(false)
+  })
+
+  it("allows live rates for an outbound method", async () => {
+    const { service } = makeProvider({})
+
+    await expect(
+      service.canCalculate({ data: { id: "STANDARD" } } as never)
+    ).resolves.toBe(true)
+  })
+})
+
+describe("validateFulfillmentData", () => {
+  it("accepts a recognized method id", async () => {
+    const { service } = makeProvider({})
+
+    await expect(
+      service.validateFulfillmentData({ id: "STANDARD" }, { foo: 1 }, {})
+    ).resolves.toEqual({ foo: 1, printful_option_id: "STANDARD" })
+  })
+
+  it("rejects an unrecognized method id rather than inventing a default", async () => {
+    const { service } = makeProvider({})
+
+    // Silently defaulting records STANDARD on the order while the customer was
+    // priced for whatever they actually selected.
+    for (const bad of [undefined, null, "", "printful-standard", 42]) {
+      await expect(
+        service.validateFulfillmentData({ id: bad } as never, {}, {})
+      ).rejects.toThrow(/unrecognized method id/)
     }
-
-    const result = (await service.calculatePrice(
-      { id: "STANDARD" } as never,
-      {} as never,
-      CONTEXT
-    )) as unknown as { data?: { rate_source?: string } }
-
-    expect(result.data?.rate_source).toBe("stale_cache")
   })
 })

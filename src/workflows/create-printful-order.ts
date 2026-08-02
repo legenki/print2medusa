@@ -48,7 +48,7 @@ const createPrintfulOrderStep = createStep(
     }
 
     const order = await orderModule.retrieveOrder(input.order_id, {
-      relations: ["items", "shipping_address", "shipping_methods"],
+      relations: ["items", "shipping_address"],
     })
 
     const items: PrintfulOrderItemInput[] = []
@@ -131,21 +131,10 @@ const createPrintfulOrderStep = createStep(
       })
     }
 
-    // Only insist on a shipping method we actually quoted. A fallback price was
-    // never confirmed by Printful, so let Printful choose its own default
-    // rather than requesting a method it may not offer.
-    const quotedShipping = (order.shipping_methods ?? [])
-      .map((m) => (m.data ?? {}) as Record<string, unknown>)
-      .find(
-        (d) =>
-          d.rate_source === "live" && typeof d.printful_shipping === "string"
-      )?.printful_shipping as string | undefined
-
     const payload: PrintfulCreateOrderInput = {
       external_id: order.id,
       recipient,
       items,
-      ...(quotedShipping ? { shipping: quotedShipping } : {}),
       confirm: options.autoSubmitOrders !== false,
     }
 
