@@ -141,11 +141,20 @@ response does arrive. For a 500-product catalog that means a long sync could
 finish successfully and then be compensated — deleting the orphans it was about
 to link.
 
-So the sync step sets an explicit, generous `timeout` rather than inheriting a
-default. The first implementation task confirms what the default actually is in
-Medusa 2.18 and picks a value with room for the largest realistic catalog. If it
-turns out no timeout can be set high enough, that is a finding worth reporting
-rather than working around.
+**There is no default, and that is the safe state.** Confirmed in Medusa 2.18:
+`TransactionStep.hasTimeout()` returns `!!this.definition.timeout`, and
+`scheduleStepTimeout` is only called when that is true
+(`transaction-orchestrator.js:637`). A step that sets no `timeout` never has one
+scheduled.
+
+So the sync step **omits `timeout` deliberately**. Setting one would be the
+dangerous choice, not the cautious one: any value we picked could be exceeded by
+a large enough catalog on a slow enough day, and the consequence is a
+successful sync being reverted — deleting the orphans it was about to link.
+
+`syncStepTimeoutSeconds` is therefore dropped from the plugin options. A store
+that genuinely wants a bound can set one on the workflow, but the plugin does
+not impose a deadline on work whose duration it cannot predict.
 
 **A crashed sync does not resume.** It is reaped after the stale window and the
 next run starts over. That is a deliberate trade, stated so nobody expects
@@ -271,8 +280,6 @@ second time.
 
 ```ts
 syncStaleMinutes: 60,            // when a running claim is presumed abandoned
-syncStepTimeoutSeconds: 7200,    // see the timeout section; must clear the
-                                 // largest realistic catalog
 onDiscontinued: "flag",          // "flag" | "ignore"
 ```
 

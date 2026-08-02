@@ -35,16 +35,16 @@
 
 **Modify:**
 
-| File                                               | Change                                                                      |
-| -------------------------------------------------- | --------------------------------------------------------------------------- |
-| `src/utils/types.ts`                               | Stock types, `syncStaleMinutes`, `syncStepTimeoutSeconds`, `onDiscontinued` |
-| `src/modules/printful/models/printful-sync-log.ts` | `heartbeat_at`, `products_processed`, `products_total`                      |
-| `src/modules/printful/service.ts`                  | `claimSyncLog`, `reapStaleSyncLogs`, `heartbeatSyncLog`                     |
-| `src/utils/mappers.ts`                             | Stop hardcoding `status: "published"`                                       |
-| `src/workflows/sync-products.ts`                   | Background step, compensation, stock handling                               |
-| `src/api/admin/printful/sync/route.ts`             | Claim, then `202` or `409`                                                  |
-| `src/jobs/sync-products.ts`                        | Same claim; quiet skip on conflict                                          |
-| `src/admin/widgets/printful-sync-widget.tsx`       | Poll progress, disable while running                                        |
+| File                                               | Change                                                  |
+| -------------------------------------------------- | ------------------------------------------------------- |
+| `src/utils/types.ts`                               | Stock types, `syncStaleMinutes`, `onDiscontinued`       |
+| `src/modules/printful/models/printful-sync-log.ts` | `heartbeat_at`, `products_processed`, `products_total`  |
+| `src/modules/printful/service.ts`                  | `claimSyncLog`, `reapStaleSyncLogs`, `heartbeatSyncLog` |
+| `src/utils/mappers.ts`                             | Stop hardcoding `status: "published"`                   |
+| `src/workflows/sync-products.ts`                   | Background step, compensation, stock handling           |
+| `src/api/admin/printful/sync/route.ts`             | Claim, then `202` or `409`                              |
+| `src/jobs/sync-products.ts`                        | Same claim; quiet skip on conflict                      |
+| `src/admin/widgets/printful-sync-widget.tsx`       | Poll progress, disable while running                    |
 
 Pure logic lives in `src/utils/` so it tests without a Medusa container, matching `order-state.ts` and `shipping-rates.ts`.
 
@@ -119,8 +119,6 @@ Add to `PrintfulPluginOptions`:
 ```typescript
   /** Minutes before a running sync claim is presumed abandoned. Default 60. */
   syncStaleMinutes?: number
-  /** Timeout for the background sync step, in seconds. */
-  syncStepTimeoutSeconds?: number
   /** What to do with variants Printful reports as discontinued. Default "flag". */
   onDiscontinued?: "flag" | "ignore"
 ```
@@ -1055,15 +1053,16 @@ const syncProductsStep = createStep(
     // setStepSuccess needed, which is what backgroundExecution adds to async.
     async: true,
     backgroundExecution: true,
-    // Not an execution timeout: the step runs regardless, but exceeding this
-    // marks it TIMEOUT and reverts the workflow, which would delete the
-    // orphans it was about to link. Sized for a large catalog.
-    timeout: 7200,
+    // No timeout on purpose. Medusa schedules one only when the step sets it
+    // (transaction-orchestrator.js:637 guards on hasTimeout()), so omitting it
+    // is the safe state: any value we picked could be exceeded by a large
+    // enough catalog, and the penalty is a SUCCESSFUL sync being reverted —
+    // deleting the orphans it was about to link.
   },
   async (input: SyncProductsInput, { container }) => {
 ```
 
-Use the timeout value Task 1 established. If Task 1 found that the default is already unlimited, say so in a comment and omit the field.
+Task 1 confirmed there is no default timeout, so the field is omitted rather than set. Do not add one.
 
 - [ ] **Step 3: Heartbeat as it works**
 
