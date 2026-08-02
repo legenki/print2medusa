@@ -3,6 +3,7 @@ import type {
   PrintfulSyncProductDetail,
   PrintfulSyncVariant,
 } from "./types"
+import { DISCONTINUED_MARKER_KEY, planStockActions } from "./stock"
 
 export type MedusaProductOptionInput = {
   title: string
@@ -345,10 +346,11 @@ export function mapSyncProductToMedusa(
   detail: PrintfulSyncProductDetail,
   options: Pick<
     PrintfulPluginOptions,
-    "storeId" | "defaultCurrency" | "markupPercent"
+    "storeId" | "defaultCurrency" | "markupPercent" | "onDiscontinued"
   > = {}
 ): MedusaProductInput {
   const { sync_product, sync_variants } = detail
+  const stock = planStockActions(sync_variants)
   const storeId = options.storeId ?? "default"
   const currency = (
     sync_variants[0]?.currency ||
@@ -376,6 +378,8 @@ export function mapSyncProductToMedusa(
         printful_catalog_variant_id: v.variant_id
           ? String(v.variant_id)
           : undefined,
+        printful_availability_status:
+          stock.variantAvailability[String(v.id)] ?? "active",
       },
     }
   })
@@ -385,7 +389,7 @@ export function mapSyncProductToMedusa(
   return {
     title: sync_product.name,
     handle: slugify(sync_product.name),
-    status: "published",
+    status: stock.status,
     thumbnail: images[0],
     images: images.map((url) => ({ url })),
     options: productOptions,
@@ -395,6 +399,9 @@ export function mapSyncProductToMedusa(
       printful_store_id: storeId,
       printful_sync_product_id: String(sync_product.id),
       printful_external_id: sync_product.external_id ?? undefined,
+      ...(stock.hasDiscontinued && options.onDiscontinued !== "ignore"
+        ? { [DISCONTINUED_MARKER_KEY]: true }
+        : {}),
     },
   }
 }

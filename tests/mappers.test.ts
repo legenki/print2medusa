@@ -180,3 +180,97 @@ describe("diffVariantsForUpsert", () => {
     expect(toCreate).toHaveLength(2)
   })
 })
+
+describe("mapSyncProductToMedusa stock", () => {
+  const soldOut: PrintfulSyncProductDetail = {
+    sync_product: {
+      id: 200,
+      external_id: null,
+      name: "Sold Out Tee",
+      variants: 1,
+      synced: 1,
+    },
+    sync_variants: [
+      {
+        id: 2001,
+        sync_product_id: 200,
+        name: "Sold Out Tee - M",
+        retail_price: "25.00",
+        currency: "USD",
+        availability_status: "out_of_stock",
+      },
+    ],
+  }
+
+  it("creates a sold-out product as a draft rather than publishing it", () => {
+    const mapped = mapSyncProductToMedusa(soldOut, { storeId: "42" })
+    expect(mapped.status).toBe("draft")
+  })
+
+  it("publishes a product with an available variant", () => {
+    const mapped = mapSyncProductToMedusa(sample, { storeId: "42" })
+    expect(mapped.status).toBe("published")
+  })
+
+  it("writes availability into variant metadata", () => {
+    const mapped = mapSyncProductToMedusa(sample, { storeId: "42" })
+    expect(mapped.variants[0].metadata.printful_availability_status).toBe(
+      "active"
+    )
+  })
+
+  it("flags a discontinued product so the owner can find it", () => {
+    const gone: PrintfulSyncProductDetail = {
+      sync_product: {
+        id: 300,
+        external_id: null,
+        name: "Retired Tee",
+        variants: 1,
+        synced: 1,
+      },
+      sync_variants: [
+        {
+          id: 3001,
+          sync_product_id: 300,
+          name: "Retired Tee - M",
+          retail_price: "25.00",
+          currency: "USD",
+          availability_status: "discontinued",
+        },
+      ],
+    }
+
+    const mapped = mapSyncProductToMedusa(gone, { storeId: "42" })
+    expect(mapped.metadata.printful_discontinued).toBe(true)
+  })
+
+  it("omits the discontinued flag when the option turns it off", () => {
+    const gone: PrintfulSyncProductDetail = {
+      sync_product: {
+        id: 301,
+        external_id: null,
+        name: "Retired Tee 2",
+        variants: 1,
+        synced: 1,
+      },
+      sync_variants: [
+        {
+          id: 3011,
+          sync_product_id: 301,
+          name: "Retired Tee 2 - M",
+          retail_price: "25.00",
+          currency: "USD",
+          availability_status: "discontinued",
+        },
+      ],
+    }
+
+    const mapped = mapSyncProductToMedusa(gone, {
+      storeId: "42",
+      onDiscontinued: "ignore",
+    })
+    expect(mapped.metadata.printful_discontinued).toBeUndefined()
+    // "ignore" turns off only the marker, not the hiding.
+    expect(mapped.status).toBe("draft")
+  })
+})
