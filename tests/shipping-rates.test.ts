@@ -8,6 +8,7 @@ import {
   isAddressQuotable,
   PRINTFUL_SHIPPING_METHODS,
 } from "../src/utils/shipping-rates"
+import { resolveStateCode } from "../src/utils/mappers"
 import type { ShippingInfo } from "../src/utils/types"
 
 const address = {
@@ -485,4 +486,81 @@ describe("Printful rate response contract", () => {
       })
     }
   })
+})
+
+describe("country matrix", () => {
+  const cases: Array<{
+    country: string
+    province?: string
+    expectState?: string
+    quotable: boolean
+    why: string
+  }> = [
+    {
+      country: "US",
+      province: "California",
+      expectState: "CA",
+      quotable: true,
+      why: "state required and resolvable",
+    },
+    {
+      country: "CA",
+      province: "Ontario",
+      expectState: "ON",
+      quotable: true,
+      why: "state required and resolvable",
+    },
+    {
+      country: "AU",
+      province: "New South Wales",
+      expectState: "NSW",
+      quotable: true,
+      why: "state required and resolvable",
+    },
+    {
+      country: "DE",
+      province: "Bavaria",
+      expectState: undefined,
+      quotable: true,
+      why: "no state table, and Printful does not require one",
+    },
+    {
+      country: "GB",
+      province: "Greater London",
+      expectState: undefined,
+      quotable: true,
+      why: "no state table, and Printful does not require one",
+    },
+    {
+      country: "JP",
+      province: "Tokyo",
+      expectState: undefined,
+      quotable: true,
+      why: "no state table, and Printful does not require one",
+    },
+    {
+      country: "US",
+      province: "Nowhere",
+      expectState: undefined,
+      quotable: false,
+      why: "state required but unresolvable — quoting would 400",
+    },
+    {
+      country: "AU",
+      province: undefined,
+      expectState: undefined,
+      quotable: false,
+      why: "state required and absent",
+    },
+  ]
+
+  for (const c of cases) {
+    it(`${c.country}${c.province ? ` / ${c.province}` : ""}: ${c.why}`, () => {
+      const state = resolveStateCode(c.province, c.country)
+      expect(state).toBe(c.expectState)
+      expect(
+        isAddressQuotable({ country_code: c.country, state_code: state })
+      ).toBe(c.quotable)
+    })
+  }
 })
