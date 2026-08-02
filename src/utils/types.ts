@@ -20,6 +20,10 @@ export type PrintfulPluginOptions = {
   shippingRateCacheTtlSeconds?: number
   /** How long a quote is retained for emergency use. Default 86400. */
   shippingRateStaleSeconds?: number
+  /** Minutes before a running sync claim is presumed abandoned. Default 60. */
+  syncStaleMinutes?: number
+  /** What to do with variants Printful reports as discontinued. Default "flag". */
+  onDiscontinued?: "flag" | "ignore"
 }
 
 export type PrintfulApiResponse<T> = {
@@ -226,3 +230,22 @@ export type FallbackReason =
   | "no_printful_items"
   | "query_unavailable"
   | "misconfigured_zero"
+
+/**
+ * Printful's per-variant availability. Confirmed against the v1 OpenAPI spec —
+ * underscores, not hyphens.
+ */
+export type PrintfulAvailabilityStatus =
+  "active" | "discontinued" | "out_of_stock" | "temporary_out_of_stock"
+
+/** What a product's stock state means for its Medusa publication. */
+export type StockPlan = {
+  /** The status the product should have, subject to the marker rules. */
+  status: "published" | "draft"
+  /** True when every variant is unavailable. */
+  allUnavailable: boolean
+  /** True when any variant reports `discontinued`. */
+  hasDiscontinued: boolean
+  /** Availability per Printful sync variant id, for variant metadata. */
+  variantAvailability: Record<string, string>
+}
