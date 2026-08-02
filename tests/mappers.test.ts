@@ -118,6 +118,16 @@ describe("resolveStateCode", () => {
     expect(resolveStateCode("NSW", "AU")).toBe("NSW")
     expect(resolveStateCode("wa", "AU")).toBe("WA")
   })
+
+  it("does not resolve a code from another country's table", () => {
+    // Codes are matched against the resolved country's own table. WA means
+    // Washington in the US and Western Australia in AU; NT is Northwest
+    // Territories in CA and Northern Territory in AU. Flattening the tables
+    // into one shared set would break that, and this is what would catch it.
+    expect(resolveStateCode("NSW", "US")).toBeUndefined()
+    expect(resolveStateCode("ACT", "CA")).toBeUndefined()
+    expect(resolveStateCode("QLD", "US")).toBeUndefined()
+  })
 })
 
 describe("diffVariantsForUpsert", () => {
