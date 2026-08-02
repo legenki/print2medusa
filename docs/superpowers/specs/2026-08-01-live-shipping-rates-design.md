@@ -240,6 +240,14 @@ tightened. A negative `calculated_amount` reaching checkout is worse than the
 silent zero the guard was originally written to prevent. `"0.00"` is a
 legitimate free method and must still price at zero.
 
+**The same rule applies to every string-to-number conversion in this release.**
+`parseInt` truncates identically: a catalog variant id of `"40.12"` parses as
+`40`, quoting shipping for a different product entirely. Numeric strings coming
+from Printful or from variant metadata are matched in full against a regex
+before parsing, never handed to `parseInt`/`parseFloat` with a NaN check. The
+same care applies to quantities, where a `NaN` does not throw but serializes to
+`"quantity": null` in the request body.
+
 ### `src/utils/printful-client.ts` (modified)
 
 Add `getShippingRates(recipient, items, currency?)` → `POST /shipping/rates`,
