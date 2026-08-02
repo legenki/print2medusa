@@ -9,7 +9,7 @@ import {
   batchProductVariantsWorkflow,
   createProductsWorkflow,
 } from "@medusajs/medusa/core-flows"
-import { Modules } from "@medusajs/framework/utils"
+import { ContainerRegistrationKeys, Modules } from "@medusajs/framework/utils"
 import { PRINTFUL_MODULE } from "../modules/printful"
 import type PrintfulModuleService from "../modules/printful/service"
 import { diffVariantsForUpsert, mapSyncProductToMedusa } from "../utils/mappers"
@@ -63,6 +63,11 @@ const syncProductsStep = createStep(
       failed: 0,
       errors: [],
     }
+
+    // Products created but not yet linked. A crash leaves exactly these
+    // invisible to the next sync's findProductLink, so they are the only
+    // thing the compensation may delete.
+    const orphanProductIds: string[] = []
 
     for (const summary of toProcess) {
       if (summary.is_ignored) {
@@ -212,12 +217,20 @@ const syncProductsStep = createStep(
           })
 
           const created = result[0]
+          orphanProductIds.push(created.id)
+
           await printful.createPrintfulProductLinks({
             printful_store_id: storeId,
             printful_sync_product_id: String(summary.id),
             medusa_product_id: created.id,
             last_synced_at: new Date(),
           })
+
+          // Linked — no longer an orphan, and never to be deleted.
+          const idx = orphanProductIds.indexOf(created.id)
+          if (idx !== -1) {
+            orphanProductIds.splice(idx, 1)
+          }
 
           for (const variant of created.variants ?? []) {
             const syncVariantId = variant.metadata?.printful_sync_variant_id
@@ -242,7 +255,36 @@ const syncProductsStep = createStep(
       }
     }
 
-    return new StepResponse(counters)
+    return new StepResponse(counters, { orphanProductIds })
+  },
+  async (
+    compensateInput: { orphanProductIds: string[] } | undefined,
+    { container }
+  ) => {
+    if (!compensateInput?.orphanProductIds?.length) {
+      return
+    }
+
+    const productModule = container.resolve(Modules.PRODUCT)
+    const logger = container.resolve(ContainerRegistrationKeys.LOGGER)
+
+    // Delete through the product module so variants, prices, and images go
+    // with the product rather than being orphaned a second time.
+    for (const id of compensateInput.orphanProductIds) {
+      try {
+        await productModule.deleteProducts([id])
+      } catch (err) {
+        logger.error(
+          `Printful sync rollback: could not delete orphaned product ${id}: ${
+            err instanceof Error ? err.message : String(err)
+          }`
+        )
+      }
+    }
+
+    logger.info(
+      `Printful sync rolled back ${compensateInput.orphanProductIds.length} orphaned product(s)`
+    )
   }
 )
 
