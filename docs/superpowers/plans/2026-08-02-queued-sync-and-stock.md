@@ -732,7 +732,11 @@ export PATH="/opt/homebrew/opt/postgresql@16/bin:$PATH"
 DATABASE_URL=postgres://andy@localhost:5432/print2medusa_test npm run test:integration
 ```
 
-The concurrency test is the important one. **Prove it is a real guard:** temporarily drop the unique index (`drop index "IDX_printful_sync_log_one_running"` against the test database), re-run, confirm _both_ claims succeed and the test FAILS, then restore the index by re-running migrations. Report both outputs.
+The concurrency test is the important one.
+
+**Prove it is a real guard — and note the trap.** Dropping the index _before_ running the suite proves nothing: the harness re-runs the migration in `beforeAll`, and `create index if not exists` puts it straight back. Anyone following that recipe sees a green suite and concludes the guarantee holds when nothing was mutated at all.
+
+Drop it _after_ bootstrap instead — a temporary second `beforeAll`, since vitest runs same-scope hooks in registration order. With the index genuinely absent both concurrent claims succeed and the test fails. Restore, confirm green, and report both outputs.
 
 - [ ] **Step 4: Verify**
 
