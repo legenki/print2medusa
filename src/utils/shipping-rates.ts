@@ -7,6 +7,18 @@ import type {
   ShippingRatesRequest,
 } from "./types"
 
+/**
+ * Shipping methods we expose as fulfillment options.
+ *
+ * These are Printful's own `ShippingInfo.id` values. The OpenAPI spec publishes
+ * no enum — only the example `STANDARD` — so this list comes from the recorded
+ * fixture and grows when a live response reveals more.
+ *
+ * The same string serves as the Medusa option id and the fallbackShippingRates
+ * key, so the three cannot drift apart.
+ */
+export const PRINTFUL_SHIPPING_METHODS = ["STANDARD"] as const
+
 export type RateCacheKeyInput = {
   address: ShippingRatesRequest["recipient"]
   items: ShippingRateItem[]

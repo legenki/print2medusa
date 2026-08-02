@@ -16,6 +16,7 @@ import {
   buildRateCacheKey,
   buildRateItems,
   isAddressQuotable,
+  PRINTFUL_SHIPPING_METHODS,
   selectRate,
 } from "../../utils/shipping-rates"
 import type {
@@ -132,12 +133,12 @@ class PrintfulFulfillmentProviderService extends AbstractFulfillmentProviderServ
 
   async getFulfillmentOptions(): Promise<FulfillmentOption[]> {
     return [
+      ...PRINTFUL_SHIPPING_METHODS.map((id) => ({
+        id,
+        name: `Printful ${id}`,
+      })),
       {
-        id: "printful-standard",
-        name: "Printful Standard",
-      },
-      {
-        id: "printful-return",
+        id: "PRINTFUL_RETURN",
         name: "Printful Return",
         is_return: true,
       },
@@ -155,7 +156,11 @@ class PrintfulFulfillmentProviderService extends AbstractFulfillmentProviderServ
   ): Promise<Record<string, unknown>> {
     return {
       ...data,
-      printful_option_id: optionData?.id ?? "printful-standard",
+      // Defaults to Printful's own first method id rather than the invented
+      // "printful-standard", which matched nothing Printful returns. Keeping
+      // the default in the allowlist means it is always an id `selectRate` can
+      // find in a live quote and `fallbackShippingRates` can be keyed on.
+      printful_option_id: optionData?.id ?? PRINTFUL_SHIPPING_METHODS[0],
     }
   }
 

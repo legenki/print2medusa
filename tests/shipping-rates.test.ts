@@ -1,9 +1,12 @@
+import { readFileSync } from "fs"
+import { join } from "path"
 import { describe, expect, it } from "vitest"
 import {
   buildRateCacheKey,
   selectRate,
   buildRateItems,
   isAddressQuotable,
+  PRINTFUL_SHIPPING_METHODS,
 } from "../src/utils/shipping-rates"
 import type { ShippingInfo } from "../src/utils/types"
 
@@ -402,5 +405,33 @@ describe("buildRateItems", () => {
         catalog
       )[0].value
     ).toBe("0.00")
+  })
+})
+
+describe("PRINTFUL_SHIPPING_METHODS", () => {
+  it("uses Printful's own method ids", () => {
+    // The same string is the Medusa option id, the fallbackShippingRates key,
+    // and Printful's ShippingInfo.id — so the three cannot drift apart.
+    expect(PRINTFUL_SHIPPING_METHODS).toContain("STANDARD")
+  })
+
+  it("does not use the invented ids from before 0.3.0", () => {
+    expect(PRINTFUL_SHIPPING_METHODS).not.toContain("printful-standard")
+  })
+
+  it("matches the ids in the recorded fixture", () => {
+    const fixture = JSON.parse(
+      readFileSync(
+        join(__dirname, "fixtures/printful-shipping-rates.json"),
+        "utf8"
+      )
+    ) as { result: Array<{ id: string }> }
+    const fixtureIds = fixture.result.map((r) => r.id)
+
+    // A method we advertise but that Printful never returns is one a customer
+    // can select and we can never price live.
+    for (const id of PRINTFUL_SHIPPING_METHODS) {
+      expect(fixtureIds).toContain(id)
+    }
   })
 })
