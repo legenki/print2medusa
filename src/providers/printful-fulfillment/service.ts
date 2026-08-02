@@ -15,12 +15,34 @@ import type {
 import { PrintfulClient } from "../../utils/printful-client"
 import type { PrintfulPluginOptions } from "../../utils/types"
 
+type QueryLike = {
+  graph: (input: {
+    entity: string
+    fields: string[]
+    filters?: Record<string, unknown>
+  }) => Promise<{ data: unknown }>
+}
+
+type CacheLike = {
+  get: <T>(key: string) => Promise<T | null>
+  set: (key: string, value: unknown, ttl?: number) => Promise<void>
+}
+
 type InjectedDependencies = {
   logger: {
     info: (msg: string) => void
     error: (msg: string) => void
     warn: (msg: string) => void
+    debug?: (msg: string) => void
   }
+  /**
+   * Bridged only when the store owner adds `dependencies: ["query"]` to the
+   * fulfillment module. Unbridged keys resolve to undefined, never throw, so
+   * this must be treated as optional at runtime regardless of the type.
+   */
+  query?: QueryLike
+  /** Medusa registers the caching module under "caching", not "cache". */
+  caching?: CacheLike
 }
 
 class PrintfulFulfillmentProviderService extends AbstractFulfillmentProviderService {
@@ -29,6 +51,8 @@ class PrintfulFulfillmentProviderService extends AbstractFulfillmentProviderServ
   protected logger_: InjectedDependencies["logger"]
   protected options_: PrintfulPluginOptions
   protected client_: PrintfulClient
+  protected query_?: QueryLike
+  protected cache_?: CacheLike
 
   constructor(container: InjectedDependencies, options: PrintfulPluginOptions) {
     super()
@@ -38,6 +62,27 @@ class PrintfulFulfillmentProviderService extends AbstractFulfillmentProviderServ
     if (!this.options_.apiToken) {
       this.logger_.warn(
         "Printful fulfillment provider: apiToken is missing from options"
+      )
+    }
+
+    this.query_ = container.query
+    this.cache_ = container.caching
+
+    if (this.options_.liveShippingRates && !this.query_) {
+      this.logger_.error(
+        "Printful live shipping rates need variant metadata, which requires " +
+          'adding dependencies: ["query"] to the @medusajs/medusa/fulfillment ' +
+          "module in medusa-config.ts. Falling back to flat rates until then."
+      )
+    }
+
+    if (
+      this.options_.liveShippingRates &&
+      !this.options_.fallbackShippingRates
+    ) {
+      this.logger_.error(
+        "Printful live shipping rates are enabled without fallbackShippingRates. " +
+          "A Printful outage will price shipping at zero."
       )
     }
 
@@ -77,8 +122,7 @@ class PrintfulFulfillmentProviderService extends AbstractFulfillmentProviderServ
   }
 
   async canCalculate(_data: CreateShippingOptionDTO): Promise<boolean> {
-    // Live rates are Phase 2
-    return false
+    return Boolean(this.options_.liveShippingRates)
   }
 
   async calculatePrice(
