@@ -131,6 +131,13 @@ through the cache. That is a follow-up, and it should not be attempted without
 an integration test that drives a real cart and reads `shipping_method.data`
 back, since that is the only thing that would have caught this.
 
+**Resolved in 0.3.1** — see
+[2026-08-02-shipping-method-agreement-design.md](./2026-08-02-shipping-method-agreement-design.md).
+The claim above that `validateFulfillmentData` "runs without rate context" is
+half wrong, and the half it gets wrong is the one that matters: it receives the
+whole cart, which is everything needed to re-quote. It confirms the method at
+selection and stamps the result, and that is what the new spec builds on.
+
 ## Getting the Printful variant id — the constraint that shapes this release
 
 Reconnaissance against the installed framework settled three things that the
