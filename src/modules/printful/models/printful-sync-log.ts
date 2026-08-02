@@ -9,6 +9,9 @@ const PrintfulSyncLog = model.define("printful_sync_log", {
   products_updated: model.number().default(0),
   products_failed: model.number().default(0),
   error_message: model.text().nullable(),
+  heartbeat_at: model.dateTime().nullable(),
+  products_processed: model.number().default(0),
+  products_total: model.number().default(0),
 })
 
 export default PrintfulSyncLog
