@@ -177,6 +177,75 @@ lines contain the real path. The endpoint's body limit is therefore raised to
 exceeded by roughly a 25-item order), so genuine Printful traffic does not
 reach that path. This is another reason to treat the secret as rotatable.
 
+## Live shipping rates
+
+Printful quotes shipping for the destination and cart contents instead of you
+setting a flat price by hand.
+
+```ts
+plugins: [
+  {
+    resolve: "@legenki/print2medusa",
+    options: {
+      apiToken: process.env.PRINTFUL_API_TOKEN,
+      liveShippingRates: true,
+      fallbackShippingRates: { STANDARD: 500 }, // minor units
+    },
+  },
+],
+modules: [
+  {
+    resolve: "@medusajs/medusa/fulfillment",
+    // Required. The provider reads Printful variant ids from variant metadata
+    // through Query, and Medusa only bridges modules a provider declares.
+    dependencies: ["query"],
+    options: {
+      providers: [
+        {
+          resolve: "@legenki/print2medusa/providers/printful-fulfillment",
+          id: "printful",
+          options: { apiToken: process.env.PRINTFUL_API_TOKEN },
+        },
+      ],
+    },
+  },
+],
+```
+
+**`dependencies: ["query"]` is not optional.** Without it the provider cannot
+resolve Printful variant ids, and every quote quietly falls back to the flat
+rate. Medusa resolves an undeclared dependency to `undefined` rather than
+failing, so the plugin logs an error at startup instead.
+
+**Give `fallbackShippingRates` an entry for every method you offer.** A method
+with no entry prices at **zero** rather than blocking checkout: Medusa cannot
+complete a cart whose shipping price fails to resolve, so an underpriced
+delivery is the lesser harm. The plugin logs an error each time it happens.
+
+### What happens when Printful is unreachable
+
+Checkout still completes. Prices fall back in this order:
+
+1. A cached quote inside `shippingRateCacheTtlSeconds` (default 600)
+2. A cached quote past that but within `shippingRateStaleSeconds` (default 86400)
+3. The flat rate from `fallbackShippingRates`
+
+A day-old real quote beats a constant someone typed once, which is why the stale
+tier outranks the flat rate. One Printful call serves every shipping option on a
+cart — the whole response is cached, and each option is picked from it locally.
+
+### Limits worth knowing
+
+- **Printful chooses the shipping method on the order.** The method the customer
+  selected is priced correctly but is not passed through to Printful, so it can
+  ship by a different service. Medusa does not carry provider data from price
+  calculation onto the shipping method, and the mechanism that would fix this
+  needs its own release.
+- **Return options are never priced live.** Printful quotes outbound shipping
+  only, so a return shipping option must be given a flat admin price.
+- **Rates are quoted in the cart's currency** by asking Printful to convert. If
+  a quote comes back in another currency it is discarded rather than converted.
+
 ## Admin usage
 
 1. Create products in Printful (Store Products).

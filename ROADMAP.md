@@ -9,9 +9,9 @@ plugin in a working state. The testing strategy tightens as the API surface grow
 
 |                       |                                          |
 | --------------------- | ---------------------------------------- |
-| Published version     | `0.2.0`                                  |
-| Tests                 | 113 (100 unit, 13 integration)           |
-| Printful API coverage | 5 of 15 endpoint groups                  |
+| Published version     | `0.3.0`                                  |
+| Tests                 | 192 (179 unit, 13 integration)           |
+| Printful API coverage | 6 of 15 endpoint groups                  |
 | Test layers           | unit + integration against real Postgres |
 
 The plugin covers products, orders, order cancellation, webhook configuration,
@@ -71,41 +71,49 @@ customer was never told their parcel shipped. Now Printful's state flows back.
 
 ---
 
-## 0.3.0 — Live shipping rates `next`
+## 0.3.0 — Live shipping rates `shipped`
 
-`canCalculate` currently returns `false`, so shipping is set by hand and
-international orders either lose money or overcharge. Printful computes the exact
-rate for the address and cart contents.
+Shipping was set by hand, so international orders either lost money or
+overcharged. Printful now computes the rate for the address and cart contents.
 
 ### API surface
 
-| Endpoint               | Purpose                             |
-| ---------------------- | ----------------------------------- |
-| `POST /shipping/rates` | Rates for an address and item set   |
-| `GET /countries`       | Validate countries and region codes |
+| Endpoint               | Purpose                           |
+| ---------------------- | --------------------------------- |
+| `POST /shipping/rates` | Rates for an address and item set |
 
-### Scope
+### What shipped
 
-- Flip `canCalculate` to `true` and implement `calculatePrice` for real
-- Rate cache (~10 min TTL) keyed by address + cart contents — `calculatePrice`
-  runs on every cart refresh
-- **Graceful fallback:** a Printful failure must not break checkout; fall back to
-  a flat rate from plugin options
-- Extend `resolveStateCode` to AU and the remaining countries from `/countries`
+- `calculatePrice` implemented behind a `liveShippingRates` option, structured so
+  **no path can throw** — Medusa blocks checkout if it does, so a Printful outage
+  degrades the price rather than the ability to buy
+- Fallback chain: fresh cache → stale cache → flat rate. A day-old real quote
+  outranks a typed-in constant
+- One API call serves every shipping option on a cart — the whole response is
+  cached under a key that excludes the method
+- Australian state codes, which Printful requires and `resolveStateCode` lacked
+- Option ids are Printful's own (`STANDARD`), replacing ids that matched nothing
+  the API returns — a **breaking change** for existing shipping options
 
 ### Testing — adds contract tests
 
-- **Critical:** Printful unavailable (timeout, 500, 429) → checkout still
-  completes on the fallback rate. Medusa blocks the operation if `calculatePrice`
-  throws or omits `calculated_amount`.
-- Cache: two identical requests hit the API once; a changed address refetches
-- Contract: recorded real `/shipping/rates` responses as fixtures, so a schema
-  change breaks the suite
-- Country matrix: US / CA / AU / DE / GB / JP — correct `state_code` and a rate returned
+- Printful unavailable (timeout, 500, 429), method absent, currency unusable,
+  config incomplete → checkout still completes on a fallback
+- Cache: two options on one cart cost one API call; a corrupt entry is a miss,
+  not a landmine; entries are written with the stale TTL so the stale tier exists
+- Contract fixture, verified by mutation to actually fail on schema drift
+- Country matrix: US / CA / AU / DE / GB / JP
+
+### What it did not solve
+
+The method the customer selected is priced correctly but **is not passed to
+Printful**, which picks its own. Medusa carries no provider data from price
+calculation onto the shipping method — the intended mechanism was implemented,
+found to be dead code, and removed rather than left looking functional.
 
 ---
 
-## 0.4.0 — Queued sync and catalog awareness
+## 0.4.0 — Queued sync and catalog awareness `next`
 
 Sync runs inside the HTTP request and hits the admin timeout on a large catalog.
 We also cannot see Printful stock: an item can sell out while the store keeps selling it.
