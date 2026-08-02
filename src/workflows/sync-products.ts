@@ -86,12 +86,11 @@ const syncProductsStep = createStep(
           continue
         }
 
-        const mapped = mapSyncProductToMedusa(detail, {
-          storeId: options.storeId,
-          defaultCurrency: options.defaultCurrency,
-          markupPercent: options.markupPercent,
-          onDiscontinued: options.onDiscontinued,
-        })
+        // Pass the options wholesale rather than picking fields. Hand-building
+        // this object is how `onDiscontinued` was silently dropped: every field
+        // is optional, so omitting one is legal TypeScript and typecheck stayed
+        // green while the option did nothing. The mapper narrows internally.
+        const mapped = mapSyncProductToMedusa(detail, options)
 
         const existingLink = await printful.findProductLink(String(summary.id))
 
