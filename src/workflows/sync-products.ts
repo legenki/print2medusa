@@ -15,7 +15,9 @@ import type PrintfulModuleService from "../modules/printful/service"
 import { diffVariantsForUpsert, mapSyncProductToMedusa } from "../utils/mappers"
 
 export type SyncProductsInput = {
-  /** Optional limit for testing / partial sync */
+  /** The claimed sync log. The workflow never claims — the route already did. */
+  sync_log_id: string
+  /** Optional limit for testing or a partial sync. */
   limit?: number
 }
 
@@ -26,23 +28,20 @@ type SyncCounters = {
   errors: string[]
 }
 
-const createSyncLogStep = createStep(
-  "printful-create-sync-log",
-  async (_input: void, { container }) => {
-    const printful: PrintfulModuleService = container.resolve(PRINTFUL_MODULE)
-    const log = await printful.createPrintfulSyncLogs({
-      status: "running",
-      started_at: new Date(),
-      products_created: 0,
-      products_updated: 0,
-      products_failed: 0,
-    })
-    return new StepResponse(log)
-  }
-)
-
 const syncProductsStep = createStep(
-  "printful-sync-products",
+  {
+    name: "printful-sync-products",
+    // Runs past the HTTP response and completes on its own — no
+    // setStepSuccess needed, which is what backgroundExecution adds to async.
+    async: true,
+    backgroundExecution: true,
+    // No timeout on purpose. Medusa schedules one only when the step sets it
+    // (TransactionStep.hasTimeout() returns !!definition.timeout, and
+    // transaction-orchestrator.js:637 guards on it), so omitting it is the
+    // safe state. Any value we picked could be exceeded by a large enough
+    // catalog, and the penalty is a SUCCESSFUL sync being reverted — deleting
+    // the orphans it was about to link.
+  },
   async (input: SyncProductsInput, { container }) => {
     const printful: PrintfulModuleService = container.resolve(PRINTFUL_MODULE)
     const productModule = container.resolve(Modules.PRODUCT)
@@ -68,6 +67,11 @@ const syncProductsStep = createStep(
     // invisible to the next sync's findProductLink, so they are the only
     // thing the compensation may delete.
     const orphanProductIds: string[] = []
+
+    let processed = 0
+    await printful.heartbeatSyncLog(input.sync_log_id, {
+      products_total: toProcess.length,
+    })
 
     for (const summary of toProcess) {
       if (summary.is_ignored) {
@@ -252,6 +256,15 @@ const syncProductsStep = createStep(
         counters.failed += 1
         const message = err instanceof Error ? err.message : String(err)
         counters.errors.push(`Product ${summary.id}: ${message}`)
+      } finally {
+        // In `finally` so it runs however the product exited — success, an
+        // early `continue`, or a throw. The heartbeat is what keeps the claim
+        // from being reaped, so a catalog of failures must not starve it.
+        processed += 1
+        await printful.heartbeatSyncLog(input.sync_log_id, {
+          products_processed: processed,
+          products_total: toProcess.length,
+        })
       }
     }
 
@@ -317,10 +330,9 @@ const finalizeSyncLogStep = createStep(
 export const syncProductsWorkflow = createWorkflow(
   "printful-sync-products",
   (input: SyncProductsInput) => {
-    const log = createSyncLogStep()
     const counters = syncProductsStep(input)
-    const finalizeInput = transform({ log, counters }, (data) => ({
-      logId: data.log.id as string,
+    const finalizeInput = transform({ input, counters }, (data) => ({
+      logId: data.input.sync_log_id,
       counters: data.counters as SyncCounters,
     }))
     const finalLog = finalizeSyncLogStep(finalizeInput)

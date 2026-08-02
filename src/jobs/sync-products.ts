@@ -1,5 +1,7 @@
 import type { MedusaContainer } from "@medusajs/framework/types"
 import syncProductsWorkflow from "../workflows/sync-products"
+import { PRINTFUL_MODULE } from "../modules/printful"
+import type PrintfulModuleService from "../modules/printful/service"
 
 /**
  * Optional scheduled full sync.
@@ -16,8 +18,17 @@ export default async function syncPrintfulProductsJob(
 
   logger.info("Printful scheduled sync starting")
   try {
+    const printful: PrintfulModuleService = container.resolve(PRINTFUL_MODULE)
+    const options = await printful.getOptions()
+    const claim = await printful.claimSyncLog(options.syncStaleMinutes ?? 60)
+
+    if (!claim) {
+      logger.info("Printful scheduled sync skipped: a sync is already running")
+      return
+    }
+
     const { result } = await syncProductsWorkflow(container).run({
-      input: {},
+      input: { sync_log_id: claim.id },
     })
     logger.info(
       `Printful scheduled sync done: created=${result.counters.created} updated=${result.counters.updated} failed=${result.counters.failed}`
