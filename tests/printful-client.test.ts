@@ -289,4 +289,75 @@ describe("PrintfulClient", () => {
 
     expect(config).toEqual({ url: null, types: [] })
   })
+
+  it("requests shipping rates", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      jsonResponse({
+        code: 200,
+        result: [
+          { id: "STANDARD", name: "Flat Rate", rate: "4.99", currency: "USD" },
+        ],
+      })
+    )
+    const client = new PrintfulClient({
+      apiToken: "token",
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      maxRetries: 0,
+    })
+
+    const rates = await client.getShippingRates({
+      recipient: { country_code: "US", state_code: "CA", zip: "91311" },
+      items: [{ variant_id: 4012, quantity: 1 }],
+      currency: "USD",
+    })
+
+    expect(rates).toHaveLength(1)
+    expect(rates[0].id).toBe("STANDARD")
+
+    const [url, init] = fetchImpl.mock.calls[0]
+    expect(String(url)).toContain("/shipping/rates")
+    expect(init.method).toBe("POST")
+    const body = JSON.parse(init.body as string)
+    expect(body.recipient.country_code).toBe("US")
+    expect(body.items[0].variant_id).toBe(4012)
+    expect(body.currency).toBe("USD")
+  })
+
+  it("returns an empty list when the result is null", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ code: 200, result: null }))
+    const client = new PrintfulClient({
+      apiToken: "token",
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      maxRetries: 0,
+    })
+
+    await expect(
+      client.getShippingRates({
+        recipient: { country_code: "DE" },
+        items: [{ variant_id: 1, quantity: 1 }],
+      })
+    ).resolves.toEqual([])
+  })
+
+  it("sends the store header on rate requests", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ code: 200, result: [] }))
+    const client = new PrintfulClient({
+      apiToken: "token",
+      storeId: "42",
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      maxRetries: 0,
+    })
+
+    await client.getShippingRates({
+      recipient: { country_code: "DE" },
+      items: [{ variant_id: 1, quantity: 1 }],
+    })
+
+    const [, init] = fetchImpl.mock.calls[0]
+    expect((init.headers as Record<string, string>)["X-PF-Store-Id"]).toBe("42")
+  })
 })

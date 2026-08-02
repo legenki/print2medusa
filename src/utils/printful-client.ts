@@ -7,6 +7,8 @@ import type {
   PrintfulSyncProductDetail,
   PrintfulSyncProductSummary,
   PrintfulWebhookConfig,
+  ShippingInfo,
+  ShippingRatesRequest,
 } from "./types"
 import { PRINTFUL_WEBHOOK_TYPES } from "./webhook-events"
 
@@ -158,6 +160,21 @@ export class PrintfulClient {
       method: "DELETE",
     })
     return data.result ?? { url: null, types: [] }
+  }
+
+  /**
+   * Quote shipping for a cart. Returns every method Printful offers for that
+   * destination in one response — the caller picks the one it needs.
+   *
+   * Setting `currency` asks Printful to convert the quote, so we never source
+   * an exchange rate ourselves.
+   */
+  async getShippingRates(input: ShippingRatesRequest): Promise<ShippingInfo[]> {
+    const data = await this.request<ShippingInfo[]>("/shipping/rates", {
+      method: "POST",
+      body: JSON.stringify(input),
+    })
+    return data.result ?? []
   }
 
   private async request<T>(
