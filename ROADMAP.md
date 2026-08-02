@@ -9,7 +9,7 @@ plugin in a working state. The testing strategy tightens as the API surface grow
 
 |                       |                                          |
 | --------------------- | ---------------------------------------- |
-| Published version     | `0.3.0`                                  |
+| Published version     | `0.4.0`                                  |
 | Tests                 | 192 (179 unit, 13 integration)           |
 | Printful API coverage | 6 of 15 endpoint groups                  |
 | Test layers           | unit + integration against real Postgres |
@@ -113,7 +113,7 @@ found to be dead code, and removed rather than left looking functional.
 
 ---
 
-## 0.4.0 — Queued sync and catalog awareness `next`
+## 0.4.0 — Queued sync and catalog awareness `shipped`
 
 Sync runs inside the HTTP request and hits the admin timeout on a large catalog.
 We also cannot see Printful stock: an item can sell out while the store keeps selling it.
@@ -143,7 +143,7 @@ We also cannot see Printful stock: an item can sell out while the store keeps se
 
 ---
 
-## 0.5.0 — Returns, taxes, and cost
+## 0.5.0 — Returns, taxes, and cost `next`
 
 Order economics: what the store actually earned, who owes tax, what happens on a
 return. `createReturnFulfillment` is a stub today.

@@ -76,15 +76,16 @@ See `examples/basic-store/` for a fuller snippet.
 
 ## What it does (MVP)
 
-| Feature              | How                                                                                                   |
-| -------------------- | ----------------------------------------------------------------------------------------------------- |
-| Product sync         | Admin **Sync Now** or `POST /admin/printful/sync` → workflow pulls Printful Sync Products into Medusa |
-| Links                | `printful_product_link` / `printful_variant_link` (+ metadata IDs)                                    |
-| Orders               | On `payment.captured` → creates Printful order with **`sync_variant_id`**                             |
-| Fulfillment provider | Select Printful shipping option in Admin locations                                                    |
-| Status               | `GET /admin/printful/status` + product list widget                                                    |
-| Shipment tracking    | Printful webhooks → Medusa fulfillment + shipment per parcel, with tracking                           |
-| Order visibility     | Printful status and per-parcel tracking on the Admin order page                                       |
+| Feature              | How                                                                                       |
+| -------------------- | ----------------------------------------------------------------------------------------- |
+| Product sync         | Admin **Sync Now** or `POST /admin/printful/sync` → runs in the background, one at a time |
+| Stock awareness      | Variants Printful reports as unavailable unpublish the product; restock republishes it    |
+| Links                | `printful_product_link` / `printful_variant_link` (+ metadata IDs)                        |
+| Orders               | On `payment.captured` → creates Printful order with **`sync_variant_id`**                 |
+| Fulfillment provider | Select Printful shipping option in Admin locations                                        |
+| Status               | `GET /admin/printful/status` + product list widget                                        |
+| Shipment tracking    | Printful webhooks → Medusa fulfillment + shipment per parcel, with tracking               |
+| Order visibility     | Printful status and per-parcel tracking on the Admin order page                           |
 
 ### Idempotency
 
@@ -246,6 +247,32 @@ cart — the whole response is cached, and each option is picked from it locally
 - **Rates are quoted in the cart's currency** by asking Printful to convert. If
   a quote comes back in another currency it is discarded rather than converted.
 
+## Catalog sync
+
+`POST /admin/printful/sync` returns `202 {sync_id}` right away and the sync runs
+in the background, so a large catalog no longer holds the request open. The
+widget polls progress while it runs.
+
+**One sync at a time.** A second request gets `409` with the running sync's
+`started_at`, and the nightly job skips quietly rather than piling on. This is
+enforced by a partial unique index in Postgres, not by a check-then-insert, so
+double-clicking **Sync Now** cannot start two.
+
+**A killed process is recovered lazily.** If Medusa dies mid-sync, the log row
+stays `running` and the widget keeps showing a sync that is no longer alive.
+Nothing sweeps on a timer: the next sync attempt — manual, or the nightly job —
+reclaims any claim whose heartbeat is older than `syncStaleMinutes` (default 60)
+and proceeds. Products created but not yet linked are deleted on rollback, so a
+crash leaves no half-imported products behind.
+
+### Stock
+
+A product whose variants Printful all reports as unavailable is set to `draft`,
+and republished when it comes back. The plugin only republishes what it
+unpublished itself — a product you set to draft by hand stays draft. Variants
+carry `printful_availability_status` in metadata, and discontinued products get
+`printful_discontinued` unless `onDiscontinued: "ignore"`.
+
 ## Admin usage
 
 1. Create products in Printful (Store Products).
@@ -286,16 +313,18 @@ the testing strategy for each release.
 
 ## Options
 
-| Option                | Description                                                             |
-| --------------------- | ----------------------------------------------------------------------- |
-| `apiToken`            | Printful private token (required)                                       |
-| `storeId`             | `X-PF-Store-Id` for account-level tokens                                |
-| `autoSubmitOrders`    | Confirm orders for fulfillment (default true)                           |
-| `createOnOrderPlaced` | Also create Printful order on `order.placed`                            |
-| `allowPartialOrders`  | Allow orders that mix Printful + non-Printful items                     |
-| `markupPercent`       | Markup on retail prices during sync                                     |
-| `defaultCurrency`     | Fallback currency code                                                  |
-| `webhookSecret`       | Shared secret for the Printful webhook path (see [Webhooks](#webhooks)) |
+| Option                | Description                                                                 |
+| --------------------- | --------------------------------------------------------------------------- |
+| `apiToken`            | Printful private token (required)                                           |
+| `storeId`             | `X-PF-Store-Id` for account-level tokens                                    |
+| `autoSubmitOrders`    | Confirm orders for fulfillment (default true)                               |
+| `createOnOrderPlaced` | Also create Printful order on `order.placed`                                |
+| `allowPartialOrders`  | Allow orders that mix Printful + non-Printful items                         |
+| `markupPercent`       | Markup on retail prices during sync                                         |
+| `defaultCurrency`     | Fallback currency code                                                      |
+| `webhookSecret`       | Shared secret for the Printful webhook path (see [Webhooks](#webhooks))     |
+| `syncStaleMinutes`    | Minutes before a running sync is presumed dead and reclaimed (default 60)   |
+| `onDiscontinued`      | `"flag"` (default) marks discontinued products, `"ignore"` omits the marker |
 
 ## License
 

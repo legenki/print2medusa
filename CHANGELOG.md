@@ -1,5 +1,47 @@
 # Changelog
 
+## 0.4.0
+
+The catalog sync runs in the background, one at a time, and Printful stock
+decides whether a product is published.
+
+### Added
+
+- **Background sync.** `POST /admin/printful/sync` responds `202 {sync_id}`
+  immediately instead of holding the request open for the whole catalog. The
+  admin widget polls progress and disables **Sync Now** while a sync runs.
+- **One sync at a time.** A second request gets `409` with the running sync's
+  `started_at`; the scheduled job skips quietly. Enforced by a partial unique
+  index on `status = 'running'` rather than a check-then-insert, so a
+  double-click cannot start two syncs.
+- **Stale claim recovery.** A sync whose process died is reclaimed after
+  `syncStaleMinutes` (default 60) by the next sync attempt.
+- **Stock-driven publication.** A product with no available variant is set to
+  `draft` and republished on restock. Only products the plugin unpublished are
+  republished — a draft you set by hand stays draft.
+- **Discontinued marker.** `printful_discontinued` in product metadata, and
+  `printful_availability_status` per variant. `onDiscontinued: "ignore"` turns
+  the marker off (it does not turn off hiding).
+- **Rollback of half-created products.** Products created but not yet linked are
+  deleted if the sync fails, so a crash leaves nothing stranded.
+- Options: `syncStaleMinutes`, `onDiscontinued`.
+
+### Known limits
+
+- **Recovery is lazy, not scheduled.** After a crash the sync log stays
+  `running` and the widget shows a sync that is not alive. Nothing reclaims it
+  until the next sync attempt, so with the default 60 minutes a crash shortly
+  after the nightly job means the catalog is blocked until someone tries again.
+- **No resume.** A reclaimed sync restarts from the beginning of the catalog
+  rather than continuing where it stopped.
+- **The compensation is unit-tested, not integration-tested.** Which products a
+  failed sync may delete is covered by `tests/orphans.test.ts`, but the
+  end-to-end rollback is not exercised against a live database:
+  `createProductsWorkflow` transitively needs the Inventory module, remote
+  links, sales-channel association and the event bus, and `@medusajs/product`'s
+  initial migration branches on a live query result, which the plugin test
+  harness cannot run.
+
 ## 0.3.0
 
 Shipping is priced from Printful's live rates instead of by hand.
