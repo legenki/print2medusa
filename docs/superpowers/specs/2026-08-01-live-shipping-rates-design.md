@@ -219,10 +219,26 @@ incidental ways — item order, address casing, surrounding whitespace. A key th
 varies with item order means the cache never hits, which is indistinguishable
 from having no cache at all except for the wasted code.
 
+It must also produce _different_ keys for genuinely different carts, which is
+harder than it looks. Joining the fields with a delimiter is not enough:
+`address1` is free text, so a customer typing `|` can merge two fields and
+collide with an unrelated address — verified during implementation, where
+`zip:"90001", address1:"1|2"` and `zip:"90001|1", address1:"2"` hashed
+identically. The key is built by hashing a JSON-encoded array, which escapes
+delimiters for us.
+
 `selectRate` converts through the existing `parsePriceToMinorUnits`. Printful
 sends the rate as a _string_ (`"4.99"`); `parseFloat("4.99") * 100` yields
 `498.99999999999994`. That helper already handles it correctly and is already
 tested — reuse it rather than writing the same conversion a second time.
+
+The rate string is validated in full before conversion, with
+`/^\d+(\.\d+)?$/`, not with `parseFloat` plus a NaN check. `parseFloat` stops at
+the first invalid character, so `"4.99abc"` parses as `4.99` and `"-4.99"` as a
+negative price — both were accepted during implementation before this was
+tightened. A negative `calculated_amount` reaching checkout is worse than the
+silent zero the guard was originally written to prevent. `"0.00"` is a
+legitimate free method and must still price at zero.
 
 ### `src/utils/printful-client.ts` (modified)
 
