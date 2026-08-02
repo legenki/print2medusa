@@ -417,6 +417,26 @@ back immediately with reason `incomplete_address`, logged at `debug` rather than
 anyway would mean a burst of 400s on every storefront visit and a cache filled
 with failures.
 
+## The invariant is breached through values, not just shapes
+
+Two defects found in review both returned something that was not a finite
+number, and neither came from a malformed context — the shape checks all
+passed. They are worth stating as rules rather than as fixed bugs:
+
+**Look up configured rates as own properties.** `fallbackShippingRates[methodId]`
+reaches `Object.prototype`, so a shipping option whose id is `toString` yields a
+_function_ as `calculated_amount`, which `JSON.stringify` then drops entirely —
+producing exactly the missing-field condition that blocks checkout, with only a
+benign warning logged. Use `Object.prototype.hasOwnProperty.call`, and type-check
+the result: a rate arriving from JSON or an env var is a string, not a number.
+
+**Validate anything read back from the cache.** A stored entry whose `rates` is
+not an array throws inside the freshness check, _before_ the API call. Since
+entries are written with the 24-hour stale TTL, one corrupt write pins every
+matching cart to the flat rate for a day while Printful is healthy — and the log
+blames Printful. A malformed entry must read as a miss. The same guard handles a
+`cached_at` in the future, which would otherwise read as fresh indefinitely.
+
 ## Cache is optional
 
 The provider resolves `Modules.CACHE` defensively. If it is unavailable, live
