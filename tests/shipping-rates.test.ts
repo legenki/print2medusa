@@ -450,3 +450,39 @@ describe("PRINTFUL_SHIPPING_METHODS", () => {
     }
   })
 })
+
+describe("Printful rate response contract", () => {
+  const fixture = JSON.parse(
+    readFileSync(
+      join(__dirname, "fixtures/printful-shipping-rates.json"),
+      "utf8"
+    )
+  ) as { code: number; result: ShippingInfo[] }
+
+  it("is shaped like a Printful API envelope", () => {
+    expect(typeof fixture.code).toBe("number")
+    expect(Array.isArray(fixture.result)).toBe(true)
+    expect(fixture.result.length).toBeGreaterThan(0)
+  })
+
+  it("still has the fields selectRate depends on", () => {
+    for (const rate of fixture.result) {
+      expect(typeof rate.id).toBe("string")
+      expect(rate.id.length).toBeGreaterThan(0)
+      expect(typeof rate.name).toBe("string")
+      // A decimal string, never a number — parsing a float for money drifts.
+      expect(typeof rate.rate).toBe("string")
+      expect(typeof rate.currency).toBe("string")
+    }
+  })
+
+  it("prices every method in the fixture without falling back", () => {
+    for (const rate of fixture.result) {
+      const result = selectRate(fixture.result, rate.id, rate.currency)
+      expect(result).toEqual({
+        ok: true,
+        amount: expect.any(Number),
+      })
+    }
+  })
+})
