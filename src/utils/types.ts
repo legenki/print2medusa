@@ -12,6 +12,14 @@ export type PrintfulPluginOptions = {
   /** Markup percent applied to Printful retail prices on sync */
   markupPercent?: number
   webhookSecret?: string
+  /** Enable live shipping rates. Requires fallbackShippingRates. */
+  liveShippingRates?: boolean
+  /** Flat rate per method id, in minor units. Required when live rates are on. */
+  fallbackShippingRates?: Record<string, number>
+  /** How long a quote counts as fresh. Default 600. */
+  shippingRateCacheTtlSeconds?: number
+  /** How long a quote is retained for emergency use. Default 86400. */
+  shippingRateStaleSeconds?: number
 }
 
 export type PrintfulApiResponse<T> = {
@@ -151,3 +159,70 @@ export type PrintfulWebhookConfig = {
   types: string[]
   params?: Record<string, unknown>
 }
+
+/** One shipping method returned by POST /shipping/rates. */
+export type ShippingInfo = {
+  id: string
+  name: string
+  /** Decimal string, e.g. "4.99" — never parse this as a float for money. */
+  rate: string
+  currency: string
+  minDeliveryDays?: number
+  maxDeliveryDays?: number
+  minDeliveryDate?: string
+  maxDeliveryDate?: string
+}
+
+/** One item in a shipping rate request. */
+export type ShippingRateItem = {
+  /** Printful Catalog variant id. */
+  variant_id: number
+  quantity: number
+  /** Item retail value; helps Printful compute duties. */
+  value?: string
+}
+
+export type ShippingRatesRequest = {
+  recipient: {
+    address1?: string
+    address2?: string
+    city?: string
+    state_code?: string
+    country_code: string
+    zip?: string
+    phone?: string
+  }
+  items: ShippingRateItem[]
+  /** Printful converts the quote into this currency when set. */
+  currency?: string
+  locale?: string
+}
+
+/**
+ * A cached rate response. Stored with the STALE ttl, not the freshness ttl —
+ * freshness is decided from `cached_at`, so an expired-but-retained quote can
+ * still serve as a fallback.
+ */
+export type CachedQuote = {
+  rates: ShippingInfo[]
+  currency: string
+  cached_at: number
+}
+
+/** Where a returned price came from. Recorded on the shipping method. */
+export type RateSource =
+  | "live"
+  | "fresh_cache"
+  | "stale_cache"
+  | "flat_fallback"
+  | "misconfigured_zero"
+
+/** Why a live quote was not used. */
+export type FallbackReason =
+  | "printful_unreachable"
+  | "method_unavailable"
+  | "currency_mismatch"
+  | "incomplete_address"
+  | "no_printful_items"
+  | "query_unavailable"
+  | "misconfigured_zero"
