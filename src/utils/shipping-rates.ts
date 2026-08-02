@@ -82,3 +82,70 @@ export function selectRate(
 
   return { ok: true, amount: parsePriceToMinorUnits(match.rate) }
 }
+
+/** Countries where Printful requires a state code alongside the country. */
+const STATE_REQUIRED_COUNTRIES = new Set(["US", "AU", "CA"])
+
+/**
+ * Whether an address carries enough for Printful to quote.
+ *
+ * `calculatePrice` runs on every cart refresh, long before a shipping address
+ * exists. Calling the API anyway means a 400 on every storefront visit, so an
+ * incomplete address short-circuits to the fallback instead.
+ */
+export function isAddressQuotable(address: {
+  country_code?: string
+  state_code?: string
+}): boolean {
+  const country = (address.country_code ?? "").trim().toUpperCase()
+  if (!country) {
+    return false
+  }
+  if (STATE_REQUIRED_COUNTRIES.has(country)) {
+    return Boolean((address.state_code ?? "").trim())
+  }
+  return true
+}
+
+export type CartLineForRates = {
+  variant_id: string
+  quantity: number
+  /** Minor units, from the cart line item. */
+  unit_price?: number
+}
+
+/**
+ * Turn cart lines into Printful rate items.
+ *
+ * `catalogIdByVariantId` maps a Medusa variant id to the Printful *catalog*
+ * variant id stored in variant metadata during sync. Lines whose variant has no
+ * catalog id are skipped: that covers non-Printful products in a mixed store,
+ * and Printful variants synced before the mapper recorded that id.
+ */
+export function buildRateItems(
+  lines: CartLineForRates[],
+  catalogIdByVariantId: Map<string, string>
+): ShippingRateItem[] {
+  const items: ShippingRateItem[] = []
+
+  for (const line of lines) {
+    const catalogId = catalogIdByVariantId.get(line.variant_id)
+    if (!catalogId) {
+      continue
+    }
+    const parsed = Number.parseInt(catalogId, 10)
+    if (Number.isNaN(parsed)) {
+      continue
+    }
+
+    items.push({
+      variant_id: parsed,
+      quantity: Number(line.quantity),
+      ...(line.unit_price != null
+        ? { value: (line.unit_price / 100).toFixed(2) }
+        : {}),
+    })
+  }
+
+  return items
+}

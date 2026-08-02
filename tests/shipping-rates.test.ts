@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest"
-import { buildRateCacheKey, selectRate } from "../src/utils/shipping-rates"
+import {
+  buildRateCacheKey,
+  selectRate,
+  buildRateItems,
+  isAddressQuotable,
+} from "../src/utils/shipping-rates"
 import type { ShippingInfo } from "../src/utils/types"
 
 const address = {
@@ -237,5 +242,93 @@ describe("selectRate", () => {
       ok: false,
       reason: "currency_mismatch",
     })
+  })
+})
+
+describe("isAddressQuotable", () => {
+  it("accepts a country-only address for countries without state requirements", () => {
+    expect(isAddressQuotable({ country_code: "DE" })).toBe(true)
+    expect(isAddressQuotable({ country_code: "GB" })).toBe(true)
+    expect(isAddressQuotable({ country_code: "JP" })).toBe(true)
+  })
+
+  it("requires a state code for US, AU, and CA", () => {
+    expect(isAddressQuotable({ country_code: "US" })).toBe(false)
+    expect(isAddressQuotable({ country_code: "AU" })).toBe(false)
+    expect(isAddressQuotable({ country_code: "CA" })).toBe(false)
+    expect(isAddressQuotable({ country_code: "US", state_code: "CA" })).toBe(
+      true
+    )
+  })
+
+  it("rejects a missing or blank country", () => {
+    expect(isAddressQuotable({ country_code: "" })).toBe(false)
+    expect(isAddressQuotable({ country_code: "   " })).toBe(false)
+    expect(isAddressQuotable({})).toBe(false)
+  })
+
+  it("is case-insensitive about the country", () => {
+    expect(isAddressQuotable({ country_code: "us", state_code: "ca" })).toBe(
+      true
+    )
+  })
+
+  it("treats a blank state as missing for state-requiring countries", () => {
+    expect(isAddressQuotable({ country_code: "US", state_code: "  " })).toBe(
+      false
+    )
+  })
+})
+
+describe("buildRateItems", () => {
+  it("builds items from variants carrying a catalog id", () => {
+    const items = buildRateItems(
+      [
+        { variant_id: "var_1", quantity: 2, unit_price: 2500 },
+        { variant_id: "var_2", quantity: 1, unit_price: 1000 },
+      ],
+      new Map([
+        ["var_1", "4012"],
+        ["var_2", "4013"],
+      ])
+    )
+    expect(items).toEqual([
+      { variant_id: 4012, quantity: 2, value: "25.00" },
+      { variant_id: 4013, quantity: 1, value: "10.00" },
+    ])
+  })
+
+  it("skips variants with no catalog id", () => {
+    const items = buildRateItems(
+      [
+        { variant_id: "var_1", quantity: 1, unit_price: 500 },
+        { variant_id: "var_other", quantity: 1, unit_price: 500 },
+      ],
+      new Map([["var_1", "4012"]])
+    )
+    expect(items).toHaveLength(1)
+    expect(items[0].variant_id).toBe(4012)
+  })
+
+  it("returns an empty array when nothing is a Printful variant", () => {
+    expect(
+      buildRateItems([{ variant_id: "x", quantity: 1 }], new Map())
+    ).toEqual([])
+  })
+
+  it("omits value when the unit price is unknown", () => {
+    const items = buildRateItems(
+      [{ variant_id: "var_1", quantity: 1 }],
+      new Map([["var_1", "4012"]])
+    )
+    expect(items[0].value).toBeUndefined()
+  })
+
+  it("skips a catalog id that is not a number", () => {
+    const items = buildRateItems(
+      [{ variant_id: "var_1", quantity: 1 }],
+      new Map([["var_1", "not-a-number"]])
+    )
+    expect(items).toEqual([])
   })
 })
