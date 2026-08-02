@@ -1,9 +1,7 @@
-import {
-  AbstractFulfillmentProviderService,
-  MedusaError,
-} from "@medusajs/framework/utils"
+import { AbstractFulfillmentProviderService } from "@medusajs/framework/utils"
 import type {
   CalculatedShippingOptionPrice,
+  CalculateShippingOptionPriceContext,
   CalculateShippingOptionPriceDTO,
   CreateShippingOptionDTO,
   FulfillmentOption,
@@ -13,7 +11,20 @@ import type {
   FulfillmentOrderDTO,
 } from "@medusajs/framework/types"
 import { PrintfulClient } from "../../utils/printful-client"
-import type { PrintfulPluginOptions } from "../../utils/types"
+import { resolveStateCode } from "../../utils/mappers"
+import {
+  buildRateCacheKey,
+  buildRateItems,
+  isAddressQuotable,
+  selectRate,
+} from "../../utils/shipping-rates"
+import type {
+  CachedQuote,
+  FallbackReason,
+  PrintfulPluginOptions,
+  RateSource,
+  ShippingInfo,
+} from "../../utils/types"
 
 type QueryLike = {
   graph: (input: {
@@ -125,15 +136,255 @@ class PrintfulFulfillmentProviderService extends AbstractFulfillmentProviderServ
     return Boolean(this.options_.liveShippingRates)
   }
 
+  /**
+   * Price one shipping option.
+   *
+   * This method must never throw and must always return a `calculated_amount`.
+   * Medusa blocks checkout when it does not, so every failure — Printful down,
+   * method missing, currency unusable, config incomplete — resolves to a
+   * fallback rather than an exception.
+   */
   async calculatePrice(
-    _optionData: CalculateShippingOptionPriceDTO["optionData"],
+    optionData: CalculateShippingOptionPriceDTO["optionData"],
     _data: CalculateShippingOptionPriceDTO["data"],
-    _context: CalculateShippingOptionPriceDTO["context"]
+    context: CalculateShippingOptionPriceContext
   ): Promise<CalculatedShippingOptionPrice> {
-    throw new MedusaError(
-      MedusaError.Types.NOT_ALLOWED,
-      "Printful fulfillment does not support calculated prices yet"
+    const methodId = String(
+      (optionData as { id?: unknown } | undefined)?.id ?? ""
     )
+
+    try {
+      return await this.quote(methodId, context)
+    } catch (err) {
+      // A bug in our own code must not block a cart either.
+      this.logger_.error(
+        `Printful rate calculation failed unexpectedly: ${
+          err instanceof Error ? err.message : String(err)
+        }`
+      )
+      return this.fallback(methodId, "printful_unreachable")
+    }
+  }
+
+  private async quote(
+    methodId: string,
+    context: CalculateShippingOptionPriceContext
+  ): Promise<CalculatedShippingOptionPrice> {
+    const ctx = context as unknown as {
+      currency_code?: string
+      shipping_address?: {
+        country_code?: string
+        province?: string
+        city?: string
+        postal_code?: string
+        address_1?: string
+        address_2?: string
+      }
+      items?: Array<{
+        variant?: { id?: string }
+        quantity?: number
+        unit_price?: number
+      }>
+    }
+
+    if (!this.query_) {
+      return this.fallback(methodId, "query_unavailable")
+    }
+
+    const addr = ctx.shipping_address ?? {}
+    const countryCode = (addr.country_code ?? "").toUpperCase()
+    const stateCode = resolveStateCode(addr.province, countryCode)
+
+    if (
+      !isAddressQuotable({ country_code: countryCode, state_code: stateCode })
+    ) {
+      return this.fallback(methodId, "incomplete_address")
+    }
+
+    const lines = (ctx.items ?? [])
+      .filter((i) => i.variant?.id)
+      .map((i) => ({
+        variant_id: i.variant!.id as string,
+        quantity: Number(i.quantity ?? 1),
+        unit_price: i.unit_price,
+      }))
+
+    const catalogIds = await this.catalogIdsFor(lines.map((l) => l.variant_id))
+    const items = buildRateItems(lines, catalogIds)
+
+    if (!items.length) {
+      return this.fallback(methodId, "no_printful_items")
+    }
+
+    const currency = (ctx.currency_code ?? "").toUpperCase()
+    const recipient = {
+      country_code: countryCode,
+      ...(stateCode ? { state_code: stateCode } : {}),
+      ...(addr.city ? { city: addr.city } : {}),
+      ...(addr.postal_code ? { zip: addr.postal_code } : {}),
+      ...(addr.address_1 ? { address1: addr.address_1 } : {}),
+      ...(addr.address_2 ? { address2: addr.address_2 } : {}),
+    }
+
+    const cacheKey = buildRateCacheKey({ address: recipient, items, currency })
+    const freshnessMs =
+      (this.options_.shippingRateCacheTtlSeconds ?? 600) * 1000
+    const staleSeconds = this.options_.shippingRateStaleSeconds ?? 86400
+
+    const cached = await this.readCache(cacheKey)
+    if (cached && Date.now() - cached.cached_at < freshnessMs) {
+      const hit = selectRate(cached.rates, methodId, currency)
+      if (hit.ok) {
+        return this.priced(hit.amount, methodId, "fresh_cache")
+      }
+    }
+
+    let rates: ShippingInfo[]
+    try {
+      rates = await this.client_.getShippingRates({
+        recipient,
+        items,
+        ...(currency ? { currency } : {}),
+      })
+    } catch (err) {
+      this.logger_.warn(
+        `Printful shipping rates unavailable: ${
+          err instanceof Error ? err.message : String(err)
+        }`
+      )
+      return this.staleOrFlat(
+        cached,
+        methodId,
+        currency,
+        "printful_unreachable"
+      )
+    }
+
+    await this.writeCache(
+      cacheKey,
+      { rates, currency, cached_at: Date.now() },
+      staleSeconds
+    )
+
+    const selected = selectRate(rates, methodId, currency)
+    if (!selected.ok) {
+      this.logger_.warn(
+        `Printful rate for ${methodId} unusable (${selected.reason}); falling back`
+      )
+      return this.staleOrFlat(cached, methodId, currency, selected.reason)
+    }
+
+    return this.priced(selected.amount, methodId, "live")
+  }
+
+  /** Look up Printful catalog variant ids for a set of Medusa variant ids. */
+  private async catalogIdsFor(
+    variantIds: string[]
+  ): Promise<Map<string, string>> {
+    const map = new Map<string, string>()
+    if (!this.query_ || !variantIds.length) {
+      return map
+    }
+
+    const { data } = await this.query_.graph({
+      entity: "product_variant",
+      fields: ["id", "metadata"],
+      filters: { id: variantIds },
+    })
+
+    for (const row of (data ?? []) as Array<{
+      id: string
+      metadata?: Record<string, unknown> | null
+    }>) {
+      const catalogId = row.metadata?.printful_catalog_variant_id
+      if (catalogId != null && catalogId !== "") {
+        map.set(row.id, String(catalogId))
+      }
+    }
+
+    return map
+  }
+
+  private async readCache(key: string): Promise<CachedQuote | null> {
+    if (!this.cache_) {
+      return null
+    }
+    try {
+      return await this.cache_.get<CachedQuote>(key)
+    } catch {
+      // A cache failure must not fail the quote.
+      return null
+    }
+  }
+
+  private async writeCache(
+    key: string,
+    value: CachedQuote,
+    ttlSeconds: number
+  ): Promise<void> {
+    if (!this.cache_) {
+      return
+    }
+    try {
+      // TTL is the STALE window, not the freshness window: an aged entry must
+      // survive so it can serve as a fallback.
+      await this.cache_.set(key, value, ttlSeconds)
+    } catch {
+      // Non-fatal.
+    }
+  }
+
+  private staleOrFlat(
+    cached: CachedQuote | null,
+    methodId: string,
+    currency: string,
+    reason: FallbackReason
+  ): CalculatedShippingOptionPrice {
+    if (cached) {
+      const stale = selectRate(cached.rates, methodId, currency)
+      if (stale.ok) {
+        return this.priced(stale.amount, methodId, "stale_cache")
+      }
+    }
+    return this.fallback(methodId, reason)
+  }
+
+  private fallback(
+    methodId: string,
+    reason: FallbackReason
+  ): CalculatedShippingOptionPrice {
+    const flat = this.options_.fallbackShippingRates?.[methodId]
+
+    if (flat == null) {
+      this.logger_.error(
+        `No fallbackShippingRates entry for "${methodId}" — pricing shipping at ` +
+          "zero. Add one for every method in the allowlist."
+      )
+      return this.priced(0, methodId, "misconfigured_zero")
+    }
+
+    if (reason === "incomplete_address" || reason === "no_printful_items") {
+      this.logger_.debug?.(`Printful rates skipped: ${reason}`)
+    } else if (reason === "query_unavailable") {
+      this.logger_.error(
+        'Printful live rates need dependencies: ["query"] on the fulfillment module'
+      )
+    } else {
+      this.logger_.warn(`Printful rate fallback (${reason}) for ${methodId}`)
+    }
+
+    return this.priced(flat, methodId, "flat_fallback")
+  }
+
+  private priced(
+    amount: number,
+    _methodId: string,
+    _source: RateSource
+  ): CalculatedShippingOptionPrice {
+    return {
+      calculated_amount: amount,
+      is_calculated_price_tax_inclusive: false,
+    } as CalculatedShippingOptionPrice
   }
 
   async createFulfillment(
