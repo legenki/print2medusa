@@ -1,5 +1,11 @@
 import { createHash } from "crypto"
-import type { ShippingRateItem, ShippingRatesRequest } from "./types"
+import { parsePriceToMinorUnits } from "./mappers"
+import type {
+  FallbackReason,
+  ShippingInfo,
+  ShippingRateItem,
+  ShippingRatesRequest,
+} from "./types"
 
 export type RateCacheKeyInput = {
   address: ShippingRatesRequest["recipient"]
@@ -39,4 +45,41 @@ export function buildRateCacheKey(input: RateCacheKeyInput): string {
   return createHash("sha256")
     .update(`${address}#${items}#${normalize(input.currency)}`)
     .digest("hex")
+}
+
+export type RateSelection =
+  { ok: true; amount: number } | { ok: false; reason: FallbackReason }
+
+/**
+ * Pick one method out of a quote list.
+ *
+ * Printful sends `rate` as a decimal string; `parsePriceToMinorUnits` rounds it
+ * correctly, where `parseFloat("4.99") * 100` would yield 498.99999999999994.
+ *
+ * A quote in a currency the cart cannot use is rejected rather than converted —
+ * we never source an exchange rate ourselves.
+ */
+export function selectRate(
+  rates: ShippingInfo[],
+  methodId: string,
+  cartCurrency: string
+): RateSelection {
+  const match = rates.find((r) => r.id === methodId)
+  if (!match) {
+    return { ok: false, reason: "method_unavailable" }
+  }
+
+  if (
+    match.currency.trim().toUpperCase() !== cartCurrency.trim().toUpperCase()
+  ) {
+    return { ok: false, reason: "currency_mismatch" }
+  }
+
+  // parsePriceToMinorUnits returns 0 for unparseable input, which would be a
+  // free delivery rather than an error — treat a non-numeric rate as no rate.
+  if (!match.rate || Number.isNaN(Number.parseFloat(match.rate))) {
+    return { ok: false, reason: "method_unavailable" }
+  }
+
+  return { ok: true, amount: parsePriceToMinorUnits(match.rate) }
 }
