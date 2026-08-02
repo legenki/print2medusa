@@ -105,23 +105,31 @@ therefore handle it — see below.
 A quoted method that Printful will not accept at order time is worse than a
 wrong price: the customer paid for a service they will not receive.
 
-So the shipping method's `data` records what was quoted:
+**This release does not solve it, and the reason is worth recording.**
 
-```ts
-{
-  printful_shipping: "STANDARD",   // the id we quoted
-  rate_source: "live" | "stale_cache" | "flat_fallback" | "misconfigured_zero",
-}
-```
+The intended design was to stamp `{ printful_shipping, rate_source }` onto the
+result of `calculatePrice`, then have `createPrintfulOrderWorkflow` pass
+`shipping` to Printful only when the source was `live`. It was implemented, and
+it was dead code.
 
-`createPrintfulOrderWorkflow` then passes `shipping` to Printful when the source
-is `live`. When it is anything else, the order is created **without** a shipping
-override — Printful picks its own default — and the discrepancy is logged, since
-we have no basis to insist on a method we never successfully quoted.
+Medusa does not carry a `data` field from `calculatePrice` onto the shipping
+method. `add-shipping-method-to-cart.js` reads exactly two fields off the
+calculated price — `calculated_amount` and `is_calculated_price_tax_inclusive` —
+and takes `data` from `validateFulfillmentData` instead. The TypeScript type
+said as much: `CalculatedShippingOptionPrice` has no `data` field, and the
+implementation needed an `as unknown as` cast to compile. That cast was the
+warning.
 
-Full reconciliation (refunding or re-quoting when Printful's actual method
-differs from what was charged) is deliberately left to a follow-up; this release
-guarantees only that a fallback quote never forces an invalid order.
+So the gate was removed rather than left in place looking functional. Orders are
+created without a `shipping` override and Printful picks its method, which is
+what already happened before this release.
+
+Closing it properly needs a different mechanism — `validateFulfillmentData` is
+the only provider-controlled writer of `shipping_method.data`, but it runs
+without rate context, so it would have to re-quote at order time or share state
+through the cache. That is a follow-up, and it should not be attempted without
+an integration test that drives a real cart and reads `shipping_method.data`
+back, since that is the only thing that would have caught this.
 
 ## Getting the Printful variant id — the constraint that shapes this release
 
