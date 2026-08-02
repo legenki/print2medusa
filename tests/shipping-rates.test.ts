@@ -104,6 +104,36 @@ describe("buildRateCacheKey", () => {
     })
     expect(a).not.toBe(b)
   })
+
+  it("does not let a delimiter in an address field merge two fields", () => {
+    // A customer can type "|" into address1. Without escaping, these two
+    // different addresses hash identically and share a cached quote.
+    const a = buildRateCacheKey({
+      address: { country_code: "US", zip: "90001", address1: "1|2" },
+      items: [{ variant_id: 1, quantity: 1 }],
+      currency: "USD",
+    })
+    const b = buildRateCacheKey({
+      address: { country_code: "US", zip: "90001|1", address1: "2" },
+      items: [{ variant_id: 1, quantity: 1 }],
+      currency: "USD",
+    })
+    expect(a).not.toBe(b)
+  })
+
+  it("does not let a delimiter in an item field merge segments", () => {
+    const a = buildRateCacheKey({
+      address: { country_code: "US" },
+      items: [{ variant_id: 1, quantity: 1 }],
+      currency: "USD#x",
+    })
+    const b = buildRateCacheKey({
+      address: { country_code: "US" },
+      items: [{ variant_id: 1, quantity: 1 }],
+      currency: "USD",
+    })
+    expect(a).not.toBe(b)
+  })
 })
 
 const rates: ShippingInfo[] = [
@@ -166,6 +196,46 @@ describe("selectRate", () => {
     expect(selectRate(bad, "STANDARD", "USD")).toEqual({
       ok: false,
       reason: "method_unavailable",
+    })
+  })
+
+  it("rejects a negative rate", () => {
+    const bad: ShippingInfo[] = [
+      { id: "STANDARD", name: "x", rate: "-4.99", currency: "USD" },
+    ]
+    expect(selectRate(bad, "STANDARD", "USD")).toEqual({
+      ok: false,
+      reason: "method_unavailable",
+    })
+  })
+
+  it("rejects a rate with trailing garbage rather than truncating it", () => {
+    // parseFloat("4.99abc") is 4.99, not NaN — corrupt data must not price.
+    const bad: ShippingInfo[] = [
+      { id: "STANDARD", name: "x", rate: "4.99abc", currency: "USD" },
+    ]
+    expect(selectRate(bad, "STANDARD", "USD")).toEqual({
+      ok: false,
+      reason: "method_unavailable",
+    })
+  })
+
+  it("prices a genuinely free method at zero", () => {
+    // "0.00" is a legitimate rate, not malformed input — it must not be
+    // rejected by the guard that catches unparseable strings.
+    const free: ShippingInfo[] = [
+      { id: "FREE", name: "Free", rate: "0.00", currency: "USD" },
+    ]
+    expect(selectRate(free, "FREE", "USD")).toEqual({ ok: true, amount: 0 })
+  })
+
+  it("does not match when both the quote and cart currency are empty", () => {
+    const empty: ShippingInfo[] = [
+      { id: "STANDARD", name: "x", rate: "4.99", currency: "" },
+    ]
+    expect(selectRate(empty, "STANDARD", "")).toEqual({
+      ok: false,
+      reason: "currency_mismatch",
     })
   })
 })

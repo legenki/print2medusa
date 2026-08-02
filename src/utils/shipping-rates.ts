@@ -28,23 +28,21 @@ function normalize(value: string | undefined): string {
  * whitespace — must produce the same key, or the cache never hits.
  */
 export function buildRateCacheKey(input: RateCacheKeyInput): string {
-  const address = [
+  // JSON-encode rather than joining with delimiters: a "|" typed into an
+  // address field would otherwise merge two fields and collide with a
+  // genuinely different address.
+  const canonical = JSON.stringify([
     normalize(input.address.country_code),
     normalize(input.address.state_code),
     normalize(input.address.city),
     normalize(input.address.zip),
     normalize(input.address.address1),
     normalize(input.address.address2),
-  ].join("|")
+    [...input.items].map((i) => `${i.variant_id}x${i.quantity}`).sort(),
+    normalize(input.currency),
+  ])
 
-  const items = [...input.items]
-    .map((i) => `${i.variant_id}x${i.quantity}`)
-    .sort()
-    .join(",")
-
-  return createHash("sha256")
-    .update(`${address}#${items}#${normalize(input.currency)}`)
-    .digest("hex")
+  return createHash("sha256").update(canonical).digest("hex")
 }
 
 export type RateSelection =
@@ -69,15 +67,16 @@ export function selectRate(
     return { ok: false, reason: "method_unavailable" }
   }
 
-  if (
-    match.currency.trim().toUpperCase() !== cartCurrency.trim().toUpperCase()
-  ) {
+  const quoteCurrency = match.currency.trim().toUpperCase()
+  const wantCurrency = cartCurrency.trim().toUpperCase()
+  if (!quoteCurrency || !wantCurrency || quoteCurrency !== wantCurrency) {
     return { ok: false, reason: "currency_mismatch" }
   }
 
-  // parsePriceToMinorUnits returns 0 for unparseable input, which would be a
-  // free delivery rather than an error — treat a non-numeric rate as no rate.
-  if (!match.rate || Number.isNaN(Number.parseFloat(match.rate))) {
+  // parseFloat stops at the first invalid character, so "4.99abc" would parse
+  // as 4.99 and "-4.99" as a negative price. Require the whole string to be a
+  // non-negative decimal; "0.00" is a legitimate free method and must pass.
+  if (!/^\d+(\.\d+)?$/.test(match.rate.trim())) {
     return { ok: false, reason: "method_unavailable" }
   }
 
