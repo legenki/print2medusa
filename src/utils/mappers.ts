@@ -102,6 +102,16 @@ const STATE_TABLES: Record<string, Record<string, string>> = {
     saskatchewan: "SK",
     yukon: "YT",
   },
+  AU: {
+    "australian capital territory": "ACT",
+    "new south wales": "NSW",
+    "northern territory": "NT",
+    queensland: "QLD",
+    "south australia": "SA",
+    tasmania: "TAS",
+    victoria: "VIC",
+    "western australia": "WA",
+  },
 }
 
 /**
@@ -125,7 +135,7 @@ export function resolveStateCode(
 
   const codes = new Set(Object.values(table))
   const upper = raw.toUpperCase()
-  if (upper.length === 2 && codes.has(upper)) {
+  if (upper.length <= 3 && codes.has(upper)) {
     return upper
   }
 

@@ -106,6 +106,18 @@ describe("resolveStateCode", () => {
     // Printful only requires state_code for US/CA/AU; unknown countries omit it
     expect(resolveStateCode("Bavaria", "DE")).toBeUndefined()
   })
+
+  it("maps Australian state and territory names to their code", () => {
+    expect(resolveStateCode("New South Wales", "AU")).toBe("NSW")
+    expect(resolveStateCode("victoria", "AU")).toBe("VIC")
+    expect(resolveStateCode("Queensland", "AU")).toBe("QLD")
+    expect(resolveStateCode("Australian Capital Territory", "AU")).toBe("ACT")
+  })
+
+  it("passes through valid Australian codes", () => {
+    expect(resolveStateCode("NSW", "AU")).toBe("NSW")
+    expect(resolveStateCode("wa", "AU")).toBe("WA")
+  })
 })
 
 describe("diffVariantsForUpsert", () => {
