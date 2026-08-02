@@ -90,6 +90,7 @@ const syncProductsStep = createStep(
           storeId: options.storeId,
           defaultCurrency: options.defaultCurrency,
           markupPercent: options.markupPercent,
+          onDiscontinued: options.onDiscontinued,
         })
 
         const existingLink = await printful.findProductLink(String(summary.id))
