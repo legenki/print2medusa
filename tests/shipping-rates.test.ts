@@ -331,4 +331,60 @@ describe("buildRateItems", () => {
     )
     expect(items).toEqual([])
   })
+
+  it("skips a catalog id with trailing garbage rather than truncating it", () => {
+    // parseInt("40.12") is 40 — a quote for an entirely different product.
+    for (const bad of ["4012abc", "40.12", "1e3"]) {
+      expect(
+        buildRateItems(
+          [{ variant_id: "var_1", quantity: 1 }],
+          new Map([["var_1", bad]])
+        )
+      ).toEqual([])
+    }
+  })
+
+  it("skips non-positive catalog ids", () => {
+    for (const bad of ["-1", "0"]) {
+      expect(
+        buildRateItems(
+          [{ variant_id: "var_1", quantity: 1 }],
+          new Map([["var_1", bad]])
+        )
+      ).toEqual([])
+    }
+  })
+
+  it("tolerates surrounding whitespace in a catalog id", () => {
+    const items = buildRateItems(
+      [{ variant_id: "var_1", quantity: 1 }],
+      new Map([["var_1", " 4012 "]])
+    )
+    expect(items).toEqual([{ variant_id: 4012, quantity: 1 }])
+  })
+
+  it("skips lines whose quantity is not a positive integer", () => {
+    const catalog = new Map([["var_1", "4012"]])
+    for (const qty of [0, -1, 1.5, NaN]) {
+      expect(
+        buildRateItems([{ variant_id: "var_1", quantity: qty }], catalog)
+      ).toEqual([])
+    }
+  })
+
+  it("formats value from minor units, including the single-cent boundary", () => {
+    const catalog = new Map([["var_1", "4012"]])
+    expect(
+      buildRateItems(
+        [{ variant_id: "var_1", quantity: 1, unit_price: 1 }],
+        catalog
+      )[0].value
+    ).toBe("0.01")
+    expect(
+      buildRateItems(
+        [{ variant_id: "var_1", quantity: 1, unit_price: 0 }],
+        catalog
+      )[0].value
+    ).toBe("0.00")
+  })
 })

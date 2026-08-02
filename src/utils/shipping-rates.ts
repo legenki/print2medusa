@@ -133,14 +133,26 @@ export function buildRateItems(
     if (!catalogId) {
       continue
     }
-    const parsed = Number.parseInt(catalogId, 10)
-    if (Number.isNaN(parsed)) {
+    // parseInt stops at the first invalid character, so "40.12" would parse as
+    // 40 — a quote for a different product. Require the whole string to be a
+    // positive integer.
+    const trimmed = catalogId.trim()
+    if (!/^\d+$/.test(trimmed)) {
+      continue
+    }
+    const parsed = Number.parseInt(trimmed, 10)
+    if (parsed <= 0) {
+      continue
+    }
+
+    const quantity = Number(line.quantity)
+    if (!Number.isInteger(quantity) || quantity <= 0) {
       continue
     }
 
     items.push({
       variant_id: parsed,
-      quantity: Number(line.quantity),
+      quantity,
       ...(line.unit_price != null
         ? { value: (line.unit_price / 100).toFixed(2) }
         : {}),
