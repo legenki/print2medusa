@@ -80,7 +80,10 @@ export function resolvePublication(input: PublicationInput): PublicationResult {
   const marked = currentMetadata[STOCK_MARKER_KEY] === "unavailable"
 
   if (plan.allUnavailable) {
-    if (currentStatus === "draft" && marked) {
+    // Only claim ownership of an unpublish we are actually performing. A
+    // product already drafted without our marker was drafted by the merchant,
+    // and marking it would make us republish their draft on restock.
+    if (currentStatus === "draft") {
       return { status: "draft", metadata, changed: false }
     }
     metadata[STOCK_MARKER_KEY] = "unavailable"

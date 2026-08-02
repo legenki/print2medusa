@@ -158,4 +158,36 @@ describe("resolvePublication", () => {
     expect(original[STOCK_MARKER_KEY]).toBe("unavailable")
     expect(result.metadata.other).toBe("keep")
   })
+
+  it("does not mark a merchant's draft that happens to be out of stock", () => {
+    // No marker means the plugin never unpublished this — the merchant did.
+    // Writing one here would make the plugin republish their draft on restock.
+    const result = resolvePublication({
+      plan: { status: "draft", allUnavailable: true } as never,
+      currentStatus: "draft",
+      currentMetadata: {},
+    })
+    expect(result.status).toBe("draft")
+    expect(result.metadata[STOCK_MARKER_KEY]).toBeUndefined()
+    expect(result.changed).toBe(false)
+  })
+
+  it("does not republish a merchant draft after a restock", () => {
+    // The full latent path: out of stock while merchant-drafted, then back in
+    // stock. The product must still be theirs to publish.
+    const outOfStock = resolvePublication({
+      plan: { status: "draft", allUnavailable: true } as never,
+      currentStatus: "draft",
+      currentMetadata: {},
+    })
+
+    const restocked = resolvePublication({
+      plan: { status: "published", allUnavailable: false } as never,
+      currentStatus: "draft",
+      currentMetadata: outOfStock.metadata,
+    })
+
+    expect(restocked.status).toBe("draft")
+    expect(restocked.changed).toBe(false)
+  })
 })
