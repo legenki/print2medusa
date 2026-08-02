@@ -313,6 +313,81 @@ class PrintfulModuleService extends MedusaService({
     )
     return logs[0] ?? null
   }
+
+  /**
+   * Mark abandoned running syncs as failed.
+   *
+   * One statement whose predicate does the selecting, so there is no
+   * read-then-decide window. A row is abandoned when its heartbeat is older
+   * than the stale window, or when it never got one.
+   */
+  async reapStaleSyncLogs(staleMinutes: number): Promise<number> {
+    const cutoff = new Date(Date.now() - staleMinutes * 60 * 1000)
+    const stale = await this.listPrintfulSyncLogs({
+      status: "running",
+      $or: [{ heartbeat_at: { $lt: cutoff } }, { heartbeat_at: null }],
+    })
+
+    for (const log of stale) {
+      await this.updatePrintfulSyncLogs({
+        id: log.id,
+        status: "failed",
+        error_message: "stale_running",
+        finished_at: new Date(),
+      })
+    }
+
+    return stale.length
+  }
+
+  /**
+   * Claim the right to run a sync.
+   *
+   * Returns the new log on success, or null when another sync already holds
+   * the claim. The unique index on `status = 'running'` is what makes this
+   * atomic — a second concurrent claim collides in the database rather than
+   * racing between a read and a write.
+   */
+  async claimSyncLog(staleMinutes: number): Promise<{ id: string } | null> {
+    await this.reapStaleSyncLogs(staleMinutes)
+
+    const now = new Date()
+    try {
+      return await this.createPrintfulSyncLogs({
+        status: "running",
+        started_at: now,
+        heartbeat_at: now,
+        products_created: 0,
+        products_updated: 0,
+        products_failed: 0,
+        products_processed: 0,
+        products_total: 0,
+      })
+    } catch (err) {
+      if (isUniqueViolation(err)) {
+        return null
+      }
+      throw err
+    }
+  }
+
+  /** The sync currently holding the claim, for a 409 body. */
+  async getRunningSyncLog() {
+    const [log] = await this.listPrintfulSyncLogs({ status: "running" })
+    return log ?? null
+  }
+
+  /** Refresh the claim so it is not reaped, and report progress. */
+  async heartbeatSyncLog(
+    id: string,
+    progress: { products_processed?: number; products_total?: number } = {}
+  ) {
+    return this.updatePrintfulSyncLogs({
+      id,
+      heartbeat_at: new Date(),
+      ...progress,
+    })
+  }
 }
 
 export default PrintfulModuleService
