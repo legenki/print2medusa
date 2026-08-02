@@ -13,6 +13,7 @@ import { ContainerRegistrationKeys, Modules } from "@medusajs/framework/utils"
 import { PRINTFUL_MODULE } from "../modules/printful"
 import type PrintfulModuleService from "../modules/printful/service"
 import { diffVariantsForUpsert, mapSyncProductToMedusa } from "../utils/mappers"
+import { OrphanTracker } from "../utils/orphans"
 
 export type SyncProductsInput = {
   /** The claimed sync log. The workflow never claims — the route already did. */
@@ -66,7 +67,7 @@ const syncProductsStep = createStep(
     // Products created but not yet linked. A crash leaves exactly these
     // invisible to the next sync's findProductLink, so they are the only
     // thing the compensation may delete.
-    const orphanProductIds: string[] = []
+    const orphans = new OrphanTracker()
 
     let processed = 0
     await printful.heartbeatSyncLog(input.sync_log_id, {
@@ -221,7 +222,7 @@ const syncProductsStep = createStep(
           })
 
           const created = result[0]
-          orphanProductIds.push(created.id)
+          orphans.track(created.id)
 
           await printful.createPrintfulProductLinks({
             printful_store_id: storeId,
@@ -231,10 +232,7 @@ const syncProductsStep = createStep(
           })
 
           // Linked — no longer an orphan, and never to be deleted.
-          const idx = orphanProductIds.indexOf(created.id)
-          if (idx !== -1) {
-            orphanProductIds.splice(idx, 1)
-          }
+          orphans.release(created.id)
 
           for (const variant of created.variants ?? []) {
             const syncVariantId = variant.metadata?.printful_sync_variant_id
@@ -268,7 +266,7 @@ const syncProductsStep = createStep(
       }
     }
 
-    return new StepResponse(counters, { orphanProductIds })
+    return new StepResponse(counters, { orphanProductIds: orphans.toDelete() })
   },
   async (
     compensateInput: { orphanProductIds: string[] } | undefined,
