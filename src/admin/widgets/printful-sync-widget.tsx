@@ -13,6 +13,8 @@ type SyncStatus = {
     products_created?: number
     products_updated?: number
     products_failed?: number
+    products_processed?: number
+    products_total?: number
     error_message?: string | null
   } | null
 }
@@ -80,6 +82,17 @@ const PrintfulSyncWidget = () => {
     void loadWebhook()
   }, [])
 
+  // The sync now runs in the background, so the response says nothing about
+  // how it ends. Progress only arrives by re-reading the status route, and
+  // only while a sync is actually running.
+  useEffect(() => {
+    if (!status?.running) {
+      return
+    }
+    const t = setInterval(() => void loadStatus(), 3000)
+    return () => clearInterval(t)
+  }, [status?.running])
+
   const onRegisterWebhook = async () => {
     setRegistering(true)
     try {
@@ -116,15 +129,24 @@ const PrintfulSyncWidget = () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({}),
       })
+      if (res.status === 409) {
+        const body = await res.json()
+        toast.info("A Printful sync is already running", {
+          description: body.started_at
+            ? `Started ${new Date(body.started_at).toLocaleString()}`
+            : undefined,
+        })
+        await loadStatus()
+        return
+      }
       if (!res.ok) {
         const text = await res.text()
         throw new Error(text || `Sync failed (${res.status})`)
       }
-      const data = await res.json()
-      toast.success("Printful sync finished", {
-        description: `Created ${data.counters?.created ?? 0}, updated ${
-          data.counters?.updated ?? 0
-        }, failed ${data.counters?.failed ?? 0}`,
+      // 202, not the finished counters: the catalog has not been walked yet.
+      // Polling reports the outcome as it happens.
+      toast.success("Printful sync started", {
+        description: "Progress will appear below as products are processed.",
       })
       await loadStatus()
     } catch (e) {
@@ -137,6 +159,10 @@ const PrintfulSyncWidget = () => {
   }
 
   const latest = status?.latest_sync
+  // `running` covers a sync started anywhere — another admin, or the nightly
+  // job — not just one this tab kicked off. Clicking into a 409 is exactly
+  // what the disable is for.
+  const running = status?.running === true
 
   return (
     <Container className="divide-y p-0">
@@ -150,10 +176,10 @@ const PrintfulSyncWidget = () => {
         <Button
           size="small"
           onClick={() => void onSync()}
-          isLoading={syncing}
-          disabled={loading || syncing}
+          isLoading={syncing || running}
+          disabled={loading || syncing || running}
         >
-          Sync Now
+          {running ? "Syncing…" : "Sync Now"}
         </Button>
       </div>
       <div className="px-6 py-4 flex flex-col gap-1">
@@ -170,11 +196,18 @@ const PrintfulSyncWidget = () => {
                 ? ` · Finished: ${new Date(latest.finished_at).toLocaleString()}`
                 : ""}
             </Text>
-            <Text size="small" className="text-ui-fg-subtle">
-              Created {latest.products_created ?? 0} · Updated{" "}
-              {latest.products_updated ?? 0} · Failed{" "}
-              {latest.products_failed ?? 0}
-            </Text>
+            {running ? (
+              <Text size="small" className="text-ui-fg-subtle">
+                Processed {latest.products_processed ?? 0} of{" "}
+                {latest.products_total ?? 0} products
+              </Text>
+            ) : (
+              <Text size="small" className="text-ui-fg-subtle">
+                Created {latest.products_created ?? 0} · Updated{" "}
+                {latest.products_updated ?? 0} · Failed{" "}
+                {latest.products_failed ?? 0}
+              </Text>
+            )}
             {latest.error_message ? (
               <Text size="small" className="text-ui-fg-error">
                 {latest.error_message.slice(0, 300)}
