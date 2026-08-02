@@ -484,11 +484,15 @@ Two assumptions survive the reconnaissance unverified. Both are cheap to test
 and expensive to be wrong about, so the first implementation task resolves them
 against the live API and the allowlist follows from the answers.
 
-1. **The exact `ShippingInfo.id` values.** The OpenAPI spec documents the field
-   as a free-form string with the single example `STANDARD` and publishes no
-   enum. Record a real response for a US and a non-US address and derive
-   `PRINTFUL_SHIPPING_METHODS` from what comes back. Until then `STANDARD` is
-   the only id known to be real, and the contract fixture is that recording.
+1. **The exact `ShippingInfo.id` values.** No `PRINTFUL_API_TOKEN` was
+   available, so the contract fixture (`tests/fixtures/printful-shipping-rates.json`)
+   is derived from the OpenAPI schema (`components.schemas.ShippingInfo`)
+   rather than recorded from a live call. The spec documents `id` as a
+   free-form string with the single example `STANDARD` and publishes no enum,
+   so `STANDARD` is the only id known to be real and `PRINTFUL_SHIPPING_METHODS`
+   allowlists only that one. Recording a live response later — for a US and a
+   non-US address — may reveal more ids that can be added to the allowlist
+   without rework.
 
 2. **That `context.currency_code` survives a full app boot.** It was traced
    through the workflow's field list and proven to pass through the module

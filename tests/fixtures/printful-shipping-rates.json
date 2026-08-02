@@ -1,0 +1,13 @@
+{
+  "code": 200,
+  "result": [
+    {
+      "id": "STANDARD",
+      "name": "Flat Rate (3-5 business days after fulfillment)",
+      "rate": "4.99",
+      "currency": "USD",
+      "minDeliveryDays": 3,
+      "maxDeliveryDays": 5
+    }
+  ]
+}
