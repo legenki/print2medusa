@@ -139,6 +139,22 @@ describe("buildRateCacheKey", () => {
     })
     expect(a).not.toBe(b)
   })
+
+  it("differs when only the item value differs", () => {
+    // `value` is sent to Printful and drives duties on international
+    // shipments, so two carts differing only in price are different quotes.
+    const a = buildRateCacheKey({
+      address,
+      items: [{ variant_id: 1, quantity: 1, value: "25.00" }],
+      currency: "USD",
+    })
+    const b = buildRateCacheKey({
+      address,
+      items: [{ variant_id: 1, quantity: 1, value: "80.00" }],
+      currency: "USD",
+    })
+    expect(a).not.toBe(b)
+  })
 })
 
 const rates: ShippingInfo[] = [

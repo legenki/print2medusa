@@ -64,6 +64,10 @@ class PrintfulFulfillmentProviderService extends AbstractFulfillmentProviderServ
   protected client_: PrintfulClient
   protected query_?: QueryLike
   protected cache_?: CacheLike
+  /** How long a cached quote counts as fresh, in milliseconds. */
+  protected freshnessMs_: number
+  /** How long a cached quote is retained so it can serve as a stale fallback. */
+  protected staleSeconds_: number
 
   constructor(container: InjectedDependencies, options: PrintfulPluginOptions) {
     super()
@@ -94,6 +98,29 @@ class PrintfulFulfillmentProviderService extends AbstractFulfillmentProviderServ
       this.logger_.error(
         "Printful live shipping rates are enabled without fallbackShippingRates. " +
           "A Printful outage will price shipping at zero."
+      )
+    }
+
+    // Coerce the TTLs once here rather than trusting them on every call: they
+    // arrive from user config and may be strings, zero, or absent.
+    const freshSeconds =
+      Number(this.options_.shippingRateCacheTtlSeconds) > 0
+        ? Number(this.options_.shippingRateCacheTtlSeconds)
+        : 600
+    const staleSeconds =
+      Number(this.options_.shippingRateStaleSeconds) > 0
+        ? Number(this.options_.shippingRateStaleSeconds)
+        : 86400
+
+    // The stale tier cannot outlive the cache entry, so retention must be at
+    // least the freshness window.
+    this.freshnessMs_ = freshSeconds * 1000
+    this.staleSeconds_ = Math.max(freshSeconds, staleSeconds)
+
+    if (staleSeconds < freshSeconds) {
+      this.logger_.warn(
+        "shippingRateStaleSeconds is below shippingRateCacheTtlSeconds; " +
+          "raising it, since a stale quote cannot outlive its cache entry."
       )
     }
 
@@ -209,7 +236,20 @@ class PrintfulFulfillmentProviderService extends AbstractFulfillmentProviderServ
         unit_price: i.unit_price,
       }))
 
-    const catalogIds = await this.catalogIdsFor(lines.map((l) => l.variant_id))
+    let catalogIds: Map<string, string>
+    try {
+      catalogIds = await this.catalogIdsFor(lines.map((l) => l.variant_id))
+    } catch (err) {
+      // Our own database, not Printful. Misreporting this sends the operator
+      // to Printful's status page during their own incident.
+      this.logger_.error(
+        `Printful rate lookup: variant query failed: ${
+          err instanceof Error ? err.message : String(err)
+        }`
+      )
+      return this.fallback(methodId, "query_unavailable")
+    }
+
     const items = buildRateItems(lines, catalogIds)
 
     if (!items.length) {
@@ -227,12 +267,12 @@ class PrintfulFulfillmentProviderService extends AbstractFulfillmentProviderServ
     }
 
     const cacheKey = buildRateCacheKey({ address: recipient, items, currency })
-    const freshnessMs =
-      (this.options_.shippingRateCacheTtlSeconds ?? 600) * 1000
-    const staleSeconds = this.options_.shippingRateStaleSeconds ?? 86400
 
     const cached = await this.readCache(cacheKey)
-    if (cached && Date.now() - cached.cached_at < freshnessMs) {
+    // A negative age means the entry is dated in the future — clock skew on the
+    // cache node — which would otherwise read as fresh until that date passes.
+    const age = cached ? Date.now() - cached.cached_at : 0
+    if (cached && age >= 0 && age < this.freshnessMs_) {
       const hit = selectRate(cached.rates, methodId, currency)
       if (hit.ok) {
         return this.priced(hit.amount, methodId, "fresh_cache")
@@ -263,7 +303,7 @@ class PrintfulFulfillmentProviderService extends AbstractFulfillmentProviderServ
     await this.writeCache(
       cacheKey,
       { rates, currency, cached_at: Date.now() },
-      staleSeconds
+      this.staleSeconds_
     )
 
     const selected = selectRate(rates, methodId, currency)
@@ -292,10 +332,16 @@ class PrintfulFulfillmentProviderService extends AbstractFulfillmentProviderServ
       filters: { id: variantIds },
     })
 
-    for (const row of (data ?? []) as Array<{
-      id: string
-      metadata?: Record<string, unknown> | null
-    }>) {
+    // `graph` is expected to return an array; a non-array result (schema drift,
+    // an error envelope) would otherwise throw on iteration.
+    const rows = Array.isArray(data)
+      ? (data as Array<{
+          id: string
+          metadata?: Record<string, unknown> | null
+        }>)
+      : []
+
+    for (const row of rows) {
       const catalogId = row.metadata?.printful_catalog_variant_id
       if (catalogId != null && catalogId !== "") {
         map.set(row.id, String(catalogId))
@@ -310,7 +356,19 @@ class PrintfulFulfillmentProviderService extends AbstractFulfillmentProviderServ
       return null
     }
     try {
-      return await this.cache_.get<CachedQuote>(key)
+      const value = await this.cache_.get<CachedQuote>(key)
+      // Treat a malformed entry as a miss. Schema drift from an older version
+      // or a partial write would otherwise throw inside the fresh-path check,
+      // blocking the live API for the whole stale window while Printful is up.
+      if (
+        !value ||
+        !Array.isArray(value.rates) ||
+        typeof value.cached_at !== "number" ||
+        !Number.isFinite(value.cached_at)
+      ) {
+        return null
+      }
+      return value
     } catch {
       // A cache failure must not fail the quote.
       return null
@@ -353,12 +411,30 @@ class PrintfulFulfillmentProviderService extends AbstractFulfillmentProviderServ
     methodId: string,
     reason: FallbackReason
   ): CalculatedShippingOptionPrice {
-    const flat = this.options_.fallbackShippingRates?.[methodId]
+    // Read as an own property: a method id like "toString" would otherwise
+    // resolve up the prototype chain to a function, which JSON.stringify drops
+    // from the response entirely — the exact missing-field condition that
+    // blocks checkout. Type-check it too, since a rate from JSON or an env var
+    // arrives as a string.
+    const table = this.options_.fallbackShippingRates
+    const configured = Object.prototype.hasOwnProperty.call(
+      table ?? {},
+      methodId
+    )
+      ? (table as unknown as Record<string, unknown>)[methodId]
+      : undefined
+    const flat =
+      typeof configured === "number" &&
+      Number.isFinite(configured) &&
+      configured >= 0
+        ? configured
+        : undefined
 
     if (flat == null) {
       this.logger_.error(
-        `No fallbackShippingRates entry for "${methodId}" — pricing shipping at ` +
-          "zero. Add one for every method in the allowlist."
+        `No usable fallbackShippingRates entry for "${methodId}" — pricing ` +
+          "shipping at zero. Every method in the allowlist needs a " +
+          "non-negative numeric entry."
       )
       return this.priced(0, methodId, "misconfigured_zero")
     }
@@ -366,9 +442,13 @@ class PrintfulFulfillmentProviderService extends AbstractFulfillmentProviderServ
     if (reason === "incomplete_address" || reason === "no_printful_items") {
       this.logger_.debug?.(`Printful rates skipped: ${reason}`)
     } else if (reason === "query_unavailable") {
-      this.logger_.error(
-        'Printful live rates need dependencies: ["query"] on the fulfillment module'
-      )
+      // Only advise the config change when query really is absent; a query that
+      // exists but failed has already logged its own, accurate reason.
+      if (!this.query_) {
+        this.logger_.error(
+          'Printful live rates need dependencies: ["query"] on the fulfillment module'
+        )
+      }
     } else {
       this.logger_.warn(`Printful rate fallback (${reason}) for ${methodId}`)
     }

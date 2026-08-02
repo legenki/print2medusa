@@ -38,7 +38,12 @@ export function buildRateCacheKey(input: RateCacheKeyInput): string {
     normalize(input.address.zip),
     normalize(input.address.address1),
     normalize(input.address.address2),
-    [...input.items].map((i) => `${i.variant_id}x${i.quantity}`).sort(),
+    // `value` is part of the request Printful prices against — it drives
+    // duties on international shipments — so it must be part of the identity
+    // of the quote, or two carts differing only in price share one answer.
+    [...input.items]
+      .map((i) => `${i.variant_id}x${i.quantity}x${i.value ?? ""}`)
+      .sort(),
     normalize(input.currency),
   ])
 
