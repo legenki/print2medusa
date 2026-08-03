@@ -20,6 +20,16 @@ export type PrintfulClientOptions = {
   maxRetries?: number
   /** Base delay in ms for exponential backoff */
   retryBaseMs?: number
+  /**
+   * Per-attempt deadline in ms. Default 15000.
+   *
+   * Node's fetch bounds headers and body at 300s each and imposes no overall
+   * deadline, so a Printful that hangs rather than fails would stall the
+   * caller — multiplied by the retry count. That is tolerable on a background
+   * sync and not on `validateFulfillmentData`, which since 0.7.0 runs inside
+   * the customer's own "add shipping method" request.
+   */
+  timeoutMs?: number
 }
 
 const DEFAULT_BASE_URL = "https://api.printful.com"
@@ -31,6 +41,7 @@ export class PrintfulClient {
   private readonly fetchImpl: typeof fetch
   private readonly maxRetries: number
   private readonly retryBaseMs: number
+  private readonly timeoutMs: number
 
   constructor(options: PrintfulClientOptions) {
     if (!options.apiToken) {
@@ -43,6 +54,8 @@ export class PrintfulClient {
     this.fetchImpl = options.fetchImpl ?? fetch
     this.maxRetries = options.maxRetries ?? 3
     this.retryBaseMs = options.retryBaseMs ?? 500
+    this.timeoutMs =
+      Number(options.timeoutMs) > 0 ? Number(options.timeoutMs) : 15000
   }
 
   async listSyncProducts(params: ListSyncProductsParams = {}): Promise<{
@@ -197,7 +210,11 @@ export class PrintfulClient {
 
     for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
       try {
+        // A fresh signal per attempt. Sharing one would abort every retry the
+        // moment the first attempt's deadline passed, turning a transient 500
+        // into a permanent failure. A caller-supplied signal still wins.
         const response = await this.fetchImpl(url, {
+          signal: AbortSignal.timeout(this.timeoutMs),
           ...init,
           headers,
         })

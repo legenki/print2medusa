@@ -361,3 +361,68 @@ describe("PrintfulClient", () => {
     expect((init.headers as Record<string, string>)["X-PF-Store-Id"]).toBe("42")
   })
 })
+
+describe("request deadline", () => {
+  it("passes an abort signal so a hung Printful cannot stall a request forever", async () => {
+    // Since 0.7.0 a rate quote runs inside validateFulfillmentData, on the
+    // customer's own "add shipping method" request. Undici's defaults only
+    // bound headers and body at 300s each, and the retry loop multiplies that
+    // by four attempts — so without a signal the customer waits, with nothing
+    // in the plugin able to stop it. A failure is fine here; the soft-fail
+    // path handles it. An unbounded wait is not.
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ code: 200, result: [] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })
+    )
+
+    const client = new PrintfulClient({
+      apiToken: "t",
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      maxRetries: 0,
+      timeoutMs: 5000,
+    })
+
+    await client.getShippingRates({
+      recipient: { country_code: "US" },
+      items: [{ variant_id: 1, quantity: 1 }],
+    })
+
+    const init = fetchImpl.mock.calls[0][1] as RequestInit
+    expect(init.signal).toBeInstanceOf(AbortSignal)
+  })
+
+  it("gives every attempt its own signal, so a retry is not born aborted", async () => {
+    // One signal shared across attempts would abort the retries too the moment
+    // the first attempt's deadline passed, turning a transient 500 into a
+    // permanent failure.
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("", { status: 500 }))
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ code: 200, result: [] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        })
+      )
+
+    const client = new PrintfulClient({
+      apiToken: "t",
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      maxRetries: 1,
+      retryBaseMs: 1,
+      timeoutMs: 5000,
+    })
+
+    await client.getShippingRates({
+      recipient: { country_code: "US" },
+      items: [{ variant_id: 1, quantity: 1 }],
+    })
+
+    expect(fetchImpl).toHaveBeenCalledTimes(2)
+    const first = (fetchImpl.mock.calls[0][1] as RequestInit).signal
+    const second = (fetchImpl.mock.calls[1][1] as RequestInit).signal
+    expect(first).not.toBe(second)
+  })
+})
