@@ -1,6 +1,6 @@
 # 0.3.1 — Making the ordered shipping method agree with the quoted one
 
-**Status:** approved design
+**Status:** shipped in `0.7.0`
 **Follows:** [2026-08-01-live-shipping-rates-design.md](./2026-08-01-live-shipping-rates-design.md),
 section "Live rates must agree with what gets ordered"
 

@@ -1,7 +1,7 @@
 {
   "name": "@legenki/print2medusa",
   "version": "0.7.0",
-  "description": "Printful → Medusa v2 plugin: product sync, auto fulfillment, and admin tools",
+  "description": "Printful \u2192 Medusa v2 plugin: product sync, auto fulfillment, and admin tools",
   "author": "Andy Legenki",
   "license": "MIT",
   "repository": {
@@ -48,6 +48,7 @@
     "typecheck:tests": "tsc --noEmit -p tsconfig.tests.json",
     "test": "vitest run",
     "test:integration": "vitest run --config vitest.integration.config.ts",
+    "test:all": "npm run test && npm run test:integration",
     "test:watch": "vitest",
     "prepublishOnly": "medusa plugin:build"
   },

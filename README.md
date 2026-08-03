@@ -320,9 +320,22 @@ breakdown need not sum to the total.
 npm install
 npm run build
 npm run dev          # watch + yalc publish
-npm test
+npm test             # unit only — no database needed
 npm run typecheck
 ```
+
+The integration suite runs against a real Postgres, so it is a separate
+command rather than part of `npm test`:
+
+```bash
+createdb print2medusa_test
+DATABASE_URL=postgres://localhost:5432/print2medusa_test npm run test:integration
+```
+
+`npm run test:all` runs both. The integration tests cover what unit tests
+cannot: that the sync claim is atomic under concurrent inserts, and that a
+redelivered webhook produces one row rather than two — both of which depend on
+real unique-index behaviour.
 
 In a host Medusa app:
 
