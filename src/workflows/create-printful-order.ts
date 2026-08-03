@@ -14,6 +14,7 @@ import type {
 } from "../utils/types"
 import { resolveStateCode } from "../utils/mappers"
 import { planCreatedOrderMetadata } from "../utils/costs"
+import { shippingOverrideFor } from "../utils/shipping-rates"
 
 export type CreatePrintfulOrderInput = {
   order_id: string
@@ -50,7 +51,10 @@ const createPrintfulOrderStep = createStep(
     }
 
     const order = await orderModule.retrieveOrder(input.order_id, {
-      relations: ["items", "shipping_address"],
+      // `shipping_methods` carries the `data` blob `validateFulfillmentData`
+      // recorded at selection, which is the only evidence on the order that
+      // Printful confirmed the method the customer paid for.
+      relations: ["items", "shipping_address", "shipping_methods"],
     })
 
     const items: PrintfulOrderItemInput[] = []
@@ -133,9 +137,15 @@ const createPrintfulOrderStep = createStep(
       })
     }
 
+    // A pure read of what was recorded at selection — no Printful call on the
+    // order path. Omitted unless Printful itself confirmed the method for this
+    // cart, in which case Printful picks the method as it does today.
+    const shipping = shippingOverrideFor(order.shipping_methods)
+
     const payload: PrintfulCreateOrderInput = {
       external_id: order.id,
       recipient,
+      ...(shipping ? { shipping } : {}),
       items,
       confirm: options.autoSubmitOrders !== false,
     }

@@ -181,6 +181,72 @@ export function confirmMethod(input: ConfirmMethodInput): ConfirmMethodResult {
   return { confirmation: "live", methodId }
 }
 
+/** A shipping method as the order path reads it back. */
+export type RecordedShippingMethod = {
+  data?: Record<string, unknown> | null
+}
+
+/**
+ * Decide the `shipping` override to send Printful for an order, if any.
+ *
+ * Pure, and a read of what `validateFulfillmentData` already recorded — the
+ * order path never calls Printful to re-confirm. All three conditions must
+ * hold: an id is present, `rate_source` marks it live, and the id is one we
+ * actually offer.
+ *
+ * Each condition guards a distinct way a bad override reaches an order.
+ * `"live"` without an id proves only that some quote succeeded, not which
+ * method it was for. An id without `"live"` is what 0.3.0 through 0.6.0 wrote —
+ * those methods carry no `rate_source` at all, so trusting a bare id would turn
+ * that release's dead code into a live promise on the first upgraded order. And
+ * an id outside the allowlist is one this plugin never offered.
+ *
+ * Omitting the override is always safe: Printful then picks the method itself,
+ * which is exactly today's behaviour. Sending an unconfirmed one is not — it
+ * insists on a method Printful may not offer for that destination, risking a
+ * rejected order. So every uncertain case resolves to `undefined`.
+ */
+export function shippingOverrideFor(
+  methods: RecordedShippingMethod[] | undefined | null
+): string | undefined {
+  const confirmed = new Set<string>()
+
+  for (const method of methods ?? []) {
+    const data = method?.data
+    if (!data) {
+      continue
+    }
+
+    // Read as own properties: a crafted `data` blob deserialized from JSON
+    // cannot reach up the prototype chain, but a method id like "constructor"
+    // resolving to a function would otherwise pass the allowlist check below.
+    const id = Object.prototype.hasOwnProperty.call(data, "printful_shipping")
+      ? data.printful_shipping
+      : undefined
+    const source = Object.prototype.hasOwnProperty.call(data, "rate_source")
+      ? data.rate_source
+      : undefined
+
+    if (typeof id !== "string" || source !== "live") {
+      continue
+    }
+    if (!(PRINTFUL_SHIPPING_METHODS as readonly string[]).includes(id)) {
+      continue
+    }
+
+    confirmed.add(id)
+  }
+
+  // Printful's `shipping` takes one value. One confirmed method — or several
+  // naming the same one, which a multi-profile cart shipping everything the
+  // same way produces — is unambiguous. Two genuinely different confirmed
+  // methods are not: picking either would override a method the customer paid
+  // for on the other profile, so we let Printful choose instead. Unconfirmed
+  // methods never enter this set, so a return method riding along on the order
+  // cannot veto the outbound method the customer selected.
+  return confirmed.size === 1 ? [...confirmed][0] : undefined
+}
+
 /** Countries where Printful requires a state code alongside the country. */
 const STATE_REQUIRED_COUNTRIES = new Set(["US", "AU", "CA"])
 

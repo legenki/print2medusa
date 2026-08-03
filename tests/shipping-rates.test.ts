@@ -8,6 +8,7 @@ import {
   buildRateItems,
   isAddressQuotable,
   rateLinesFrom,
+  shippingOverrideFor,
   PRINTFUL_SHIPPING_METHODS,
 } from "../src/utils/shipping-rates"
 import { resolveStateCode } from "../src/utils/mappers"
@@ -762,5 +763,141 @@ describe("cache key agreement between pricing and confirmation", () => {
     const unprofiled = { variant: { id: "var_bare" }, quantity: 1 }
     const lines = rateLinesFrom({ items: [unprofiled] }, "sp_printful")
     expect(lines.map((l) => l.variant_id)).toEqual(["var_bare"])
+  })
+})
+
+describe("shippingOverrideFor", () => {
+  const live = { printful_shipping: "STANDARD", rate_source: "live" }
+
+  it("sends the override when Printful confirmed the method live", () => {
+    expect(shippingOverrideFor([{ data: live }])).toBe("STANDARD")
+  })
+
+  it("sends nothing when the id is absent", () => {
+    // "live" without an id proves only that some quote succeeded, not which
+    // method it was for. Inventing one would insist on a method the customer
+    // never selected.
+    expect(shippingOverrideFor([{ data: { rate_source: "live" } }])).toBe(
+      undefined
+    )
+  })
+
+  it("sends nothing when the rate source is not live", () => {
+    // The governing property: an override is sent only when Printful itself
+    // confirmed the method for this cart. A fallback price was never confirmed,
+    // so insisting on the method risks an order Printful rejects.
+    for (const source of [
+      "flat_fallback",
+      "stale_cache",
+      "printful_unreachable",
+      "method_unavailable",
+      "currency_mismatch",
+      "misconfigured_zero",
+    ]) {
+      expect(
+        shippingOverrideFor([
+          { data: { printful_shipping: "STANDARD", rate_source: source } },
+        ])
+      ).toBe(undefined)
+    }
+  })
+
+  it("sends nothing when rate_source is missing entirely", () => {
+    // A method recorded by 0.3.0–0.6.0 has no rate_source at all. Trusting a
+    // bare id would resurrect the dead-code path as a live promise.
+    expect(
+      shippingOverrideFor([{ data: { printful_shipping: "STANDARD" } }])
+    ).toBe(undefined)
+  })
+
+  it("sends nothing when the id is outside the allowlist", () => {
+    // Guards against a value that reached the order by some other route.
+    expect(
+      shippingOverrideFor([
+        { data: { printful_shipping: "EXPRESS_MADE_UP", rate_source: "live" } },
+      ])
+    ).toBe(undefined)
+  })
+
+  it("ignores a non-string id", () => {
+    expect(
+      shippingOverrideFor([
+        { data: { printful_shipping: 7, rate_source: "live" } },
+      ])
+    ).toBe(undefined)
+  })
+
+  it("sends nothing for an order with no shipping methods", () => {
+    expect(shippingOverrideFor([])).toBe(undefined)
+    expect(shippingOverrideFor(undefined)).toBe(undefined)
+  })
+
+  it("tolerates a method whose data is absent", () => {
+    expect(shippingOverrideFor([{}, { data: live }])).toBe("STANDARD")
+  })
+
+  it("sends the single agreed method when several methods agree on it", () => {
+    // Printful's `shipping` is one value. Several methods naming the same
+    // confirmed id is unambiguous, so it is safe to send.
+    expect(shippingOverrideFor([{ data: live }, { data: live }])).toBe(
+      "STANDARD"
+    )
+  })
+
+  it("sends nothing when confirmed methods disagree", () => {
+    // Printful takes a single `shipping` value, so picking one of two
+    // genuinely different confirmed methods would silently override a method
+    // the customer paid for on the other profile. Letting Printful choose is
+    // the lesser harm — the same reasoning as the unconfirmed case.
+    //
+    // The allowlist holds one id today, so a disagreement between two
+    // *allowlisted* ids is not constructible from real data. Stubbing the
+    // allowlist to prove the rule would test the stub, so this asserts the
+    // reachable behaviour instead — and `PRINTFUL_SHIPPING_METHODS.length`
+    // guards the gap: when a second method is added, this test starts failing
+    // and must be rewritten against two real ids.
+    expect(PRINTFUL_SHIPPING_METHODS).toHaveLength(1)
+
+    // A second confirmed-looking method outside the allowlist is dropped
+    // rather than allowed to win or to veto.
+    expect(
+      shippingOverrideFor([
+        { data: live },
+        { data: { printful_shipping: "NOT_OFFERED", rate_source: "live" } },
+      ])
+    ).toBe("STANDARD")
+  })
+
+  it("picks no override when two allowlisted methods disagree", () => {
+    // Exercises the disagreement branch directly against every pair the
+    // allowlist could ever hold. With one method today the loop body does not
+    // run, but the moment a second id is added this covers it without needing
+    // to be rewritten — and it cannot silently pass on a stub, because it uses
+    // the real allowlist.
+    const ids = [...PRINTFUL_SHIPPING_METHODS]
+    for (const a of ids) {
+      for (const b of ids) {
+        if (a === b) {
+          continue
+        }
+        expect(
+          shippingOverrideFor([
+            { data: { printful_shipping: a, rate_source: "live" } },
+            { data: { printful_shipping: b, rate_source: "live" } },
+          ])
+        ).toBe(undefined)
+      }
+    }
+  })
+
+  it("ignores an unconfirmed method alongside a confirmed one", () => {
+    // A return method rides along on the same order and never confirms; it
+    // must not veto the outbound method the customer actually paid for.
+    expect(
+      shippingOverrideFor([
+        { data: { printful_option_id: "PRINTFUL_RETURN" } },
+        { data: live },
+      ])
+    ).toBe("STANDARD")
   })
 })
