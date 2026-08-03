@@ -3,6 +3,8 @@ import {
   COST_CURRENCY_KEY,
   COST_TOTAL_KEY,
   MARGIN_KEY,
+  MONEY_SCALE_KEY,
+  MONEY_SCALE_VERSION,
   RETAIL_CURRENCY_KEY,
   RETAIL_TOTAL_KEY,
   planCostMetadata,
@@ -315,5 +317,33 @@ describe("EUR order against USD Printful pricing", () => {
     expect(meta[MARGIN_KEY]).toBeUndefined()
     // 4.99 is the value that truncation would have turned into 498.
     expect(meta["printful_cost_shipping"]).toBe(499)
+  })
+})
+
+describe("money scale marker", () => {
+  it("stamps the scale so a reader can tell corrected values from old ones", () => {
+    // Values written before 0.6.0 scaled every currency by 100, so a JPY
+    // order holds 150000 for ¥1500. Nothing distinguishes that from a
+    // correctly-stored 150000 in a currency that does have minor units —
+    // except this marker, which only 0.6.0 and later write.
+    const meta = planCostMetadata({
+      id: 1,
+      status: "fulfilled",
+      costs: { currency: "JPY", total: 1500 },
+    } as never)
+
+    // Asserted against the literal, not against the constant: comparing
+    // MONEY_SCALE_KEY to MONEY_SCALE_VERSION would pass while both were
+    // undefined, which is exactly the state before this is implemented.
+    expect(meta["printful_money_scale"]).toBe(2)
+    expect(MONEY_SCALE_KEY).toBe("printful_money_scale")
+    expect(MONEY_SCALE_VERSION).toBe(2)
+  })
+
+  it("does not stamp it when there was nothing to store", () => {
+    // An order carrying no costs writes no keys at all, so a bare marker
+    // would imply a scale for figures that do not exist.
+    const meta = planCostMetadata({ id: 1, status: "draft" } as never)
+    expect(meta).toEqual({})
   })
 })

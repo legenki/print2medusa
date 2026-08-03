@@ -2,6 +2,7 @@ import { defineWidgetConfig } from "@medusajs/admin-sdk"
 import type { AdminOrder, DetailWidgetProps } from "@medusajs/framework/types"
 import { Badge, Container, Heading, Text } from "@medusajs/ui"
 import { minorUnitFactor } from "../../utils/currency"
+import { MONEY_SCALE_VERSION } from "../../utils/costs"
 
 type PrintfulShipment = {
   id: string
@@ -25,13 +26,26 @@ const ATTENTION_STATES = new Set(["failed", "canceled", "onhold"])
  * Minor units to a display string. 1500 with "usd" becomes "15.00 USD"; the
  * same 1500 with "jpy" becomes "1500 JPY", because yen has no subunit — it is
  * stored unscaled and "1500.00 JPY" would be a malformed amount.
+ *
+ * `scale` is the order's `printful_money_scale`. Orders stamped before 0.6.0
+ * carry no marker and were scaled by 100 whatever their currency, so a ¥1500
+ * order holds 150000. Reading those with the new rule would show 150000 yen.
+ * Dividing by 100 regardless — which is what the old widget did — is exactly
+ * right for them, and this keeps doing it until a webhook restamps the order.
  */
-const formatMinor = (amount: unknown, currency: unknown): string | null => {
+const formatMinor = (
+  amount: unknown,
+  currency: unknown,
+  scale: unknown
+): string | null => {
   if (typeof amount !== "number" || !Number.isFinite(amount)) {
     return null
   }
   const code = typeof currency === "string" ? currency.toUpperCase() : ""
-  const factor = minorUnitFactor(typeof currency === "string" ? currency : null)
+  const legacy = scale !== MONEY_SCALE_VERSION
+  const factor = legacy
+    ? 100
+    : minorUnitFactor(typeof currency === "string" ? currency : null)
   const decimals = factor === 1 ? 0 : 2
   return `${(amount / factor).toFixed(decimals)}${code ? ` ${code}` : ""}`
 }
@@ -51,17 +65,21 @@ const PrintfulOrderWidget = ({ data }: DetailWidgetProps<AdminOrder>) => {
 
   const isAttention = status ? ATTENTION_STATES.has(status) : false
 
+  const moneyScale = metadata.printful_money_scale
   const costTotal = formatMinor(
     metadata.printful_cost_total,
-    metadata.printful_cost_currency
+    metadata.printful_cost_currency,
+    moneyScale
   )
   const retailTotal = formatMinor(
     metadata.printful_retail_total,
-    metadata.printful_retail_currency
+    metadata.printful_retail_currency,
+    moneyScale
   )
   const margin = formatMinor(
     metadata.printful_margin,
-    metadata.printful_cost_currency
+    metadata.printful_cost_currency,
+    moneyScale
   )
   // Both totals known but no margin means planCostMetadata withheld it because
   // the currencies differ — worth saying plainly rather than showing a gap.

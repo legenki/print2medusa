@@ -47,6 +47,23 @@ export const RETAIL_CURRENCY_KEY = "printful_retail_currency"
 export const RETAIL_TOTAL_KEY = "printful_retail_total"
 export const MARGIN_KEY = "printful_margin"
 
+/**
+ * Which scaling rule produced the amounts on this order.
+ *
+ * Version 1 (implicit, never written) scaled every currency by 100. A JPY
+ * order stamped before 0.6.0 therefore holds 150000 for ¥1500, and nothing in
+ * the data distinguishes that from a correctly-stored 150000 — the currency
+ * code is the same either way. This marker is the distinction: its absence
+ * means "scaled by 100 regardless of currency, trust it only for currencies
+ * that have minor units".
+ *
+ * No migration divides old values automatically. A store that never sold in a
+ * zero-decimal currency has nothing wrong to fix, and a blind division would
+ * corrupt anything a merchant had already corrected by hand.
+ */
+export const MONEY_SCALE_KEY = "printful_money_scale"
+export const MONEY_SCALE_VERSION = 2
+
 /** Cost fields copied verbatim, minus `currency` and `total` which are special. */
 const COST_FIELDS = [
   "subtotal",
@@ -95,6 +112,10 @@ export function planCostMetadata(
   if (!costs && !retail) {
     return metadata
   }
+
+  // Stamped only once there is something to describe. A bare marker on an
+  // order with no amounts would claim a scale for figures that do not exist.
+  metadata[MONEY_SCALE_KEY] = MONEY_SCALE_VERSION
 
   const costCurrency = costs?.currency?.toLowerCase()
   const retailCurrency = retail?.currency?.toLowerCase()
