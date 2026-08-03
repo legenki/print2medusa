@@ -153,6 +153,118 @@ export type CartLineForRates = {
 }
 
 /**
+ * The shape both rate paths read a cart out of.
+ *
+ * `calculatePrice` receives a `CalculateShippingOptionPriceContext` and
+ * `validateFulfillmentData` receives `{ ...cart }`. Both are structurally carts,
+ * but neither is typed with the fields we actually need (`CartPropsForFulfillment`
+ * declares no `currency_code` and no `unit_price`), so both call sites narrow to
+ * this instead of to a framework type that does not describe what arrives.
+ */
+export type RateContext = {
+  currency_code?: string
+  shipping_address?: {
+    country_code?: string
+    province?: string
+    city?: string
+    postal_code?: string
+    address_1?: string
+    address_2?: string
+  }
+  items?: Array<{
+    variant?: { id?: string }
+    quantity?: number
+    unit_price?: number
+  }>
+}
+
+/** Why a rate request could not be built at all. */
+export type RateRequestFailure = "incomplete_address" | "no_printful_items"
+
+export type RateRequestPlan =
+  | {
+      ok: true
+      recipient: ShippingRatesRequest["recipient"]
+      items: ShippingRateItem[]
+      currency: string
+      cacheKey: string
+      /** Medusa variant ids read off the context, before catalog resolution. */
+      variantIds: string[]
+    }
+  | { ok: false; reason: RateRequestFailure }
+
+/**
+ * Read the cart lines a rate request would be built from.
+ *
+ * Split out from `buildRateRequest` because the caller must resolve catalog ids
+ * for these variants — a container-bound `query` lookup — before the request can
+ * be built. Keeping the lookup outside lets the builder stay pure.
+ */
+export function rateLinesFrom(context: RateContext): CartLineForRates[] {
+  return (context.items ?? [])
+    .filter((i) => i.variant?.id)
+    .map((i) => ({
+      variant_id: i.variant!.id as string,
+      quantity: Number(i.quantity ?? 1),
+      unit_price: i.unit_price,
+    }))
+}
+
+/**
+ * Build the Printful rate request and its cache key from a cart context.
+ *
+ * `calculatePrice` and `validateFulfillmentData` must agree on the cache key
+ * exactly: the confirm path is only cheap because it reads the entry the pricing
+ * path wrote moments earlier under the same key. Two call sites computing that
+ * key independently would drift silently — a confirmation would miss a live
+ * entry and re-hit the API, or confirm against a differently-shaped cart. One
+ * function, called by both, is what makes the drift impossible.
+ */
+export function buildRateRequest(
+  context: RateContext,
+  lines: CartLineForRates[],
+  catalogIdByVariantId: Map<string, string>,
+  stateCode: string | undefined
+): RateRequestPlan {
+  const addr = context.shipping_address ?? {}
+  const countryCode = (addr.country_code ?? "").toUpperCase()
+
+  if (
+    !isAddressQuotable({ country_code: countryCode, state_code: stateCode })
+  ) {
+    return { ok: false, reason: "incomplete_address" }
+  }
+
+  // Resolved before the items are built: each line's `value` is denominated in
+  // the cart's currency, so it decides how the minor units convert out.
+  const currency = (context.currency_code ?? "").toUpperCase()
+
+  const items = buildRateItems(lines, catalogIdByVariantId, currency)
+
+  if (!items.length) {
+    return { ok: false, reason: "no_printful_items" }
+  }
+
+  const recipient = {
+    country_code: countryCode,
+    ...(stateCode ? { state_code: stateCode } : {}),
+    ...(addr.city ? { city: addr.city } : {}),
+    ...(addr.postal_code ? { zip: addr.postal_code } : {}),
+    ...(addr.address_1 ? { address1: addr.address_1 } : {}),
+    ...(addr.address_2 ? { address2: addr.address_2 } : {}),
+  }
+
+  return {
+    ok: true,
+    recipient,
+    items,
+    currency,
+    cacheKey: buildRateCacheKey({ address: recipient, items, currency }),
+    variantIds: lines.map((l) => l.variant_id),
+  }
+}
+
+/**
  * Turn cart lines into Printful rate items.
  *
  * `catalogIdByVariantId` maps a Medusa variant id to the Printful *catalog*

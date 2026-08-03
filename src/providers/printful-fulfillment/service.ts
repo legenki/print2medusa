@@ -16,14 +16,15 @@ import type {
 import { PrintfulClient } from "../../utils/printful-client"
 import { resolveStateCode } from "../../utils/mappers"
 import {
-  buildRateCacheKey,
-  buildRateItems,
+  buildRateRequest,
   isAddressQuotable,
   LEGACY_OPTION_IDS,
   PRINTFUL_RETURN_OPTION_ID,
   PRINTFUL_SHIPPING_METHODS,
+  rateLinesFrom,
   selectRate,
 } from "../../utils/shipping-rates"
+import type { RateContext, RateRequestPlan } from "../../utils/shipping-rates"
 import type {
   CachedQuote,
   FallbackReason,
@@ -235,79 +236,15 @@ class PrintfulFulfillmentProviderService extends AbstractFulfillmentProviderServ
     methodId: string,
     context: CalculateShippingOptionPriceContext
   ): Promise<CalculatedShippingOptionPrice> {
-    const ctx = context as unknown as {
-      currency_code?: string
-      shipping_address?: {
-        country_code?: string
-        province?: string
-        city?: string
-        postal_code?: string
-        address_1?: string
-        address_2?: string
-      }
-      items?: Array<{
-        variant?: { id?: string }
-        quantity?: number
-        unit_price?: number
-      }>
+    const ctx = context as unknown as RateContext
+
+    const plan = await this.planRateRequest(ctx)
+
+    if (!plan.ok) {
+      return this.fallback(methodId, plan.reason)
     }
 
-    if (!this.query_) {
-      return this.fallback(methodId, "query_unavailable")
-    }
-
-    const addr = ctx.shipping_address ?? {}
-    const countryCode = (addr.country_code ?? "").toUpperCase()
-    const stateCode = resolveStateCode(addr.province, countryCode)
-
-    if (
-      !isAddressQuotable({ country_code: countryCode, state_code: stateCode })
-    ) {
-      return this.fallback(methodId, "incomplete_address")
-    }
-
-    const lines = (ctx.items ?? [])
-      .filter((i) => i.variant?.id)
-      .map((i) => ({
-        variant_id: i.variant!.id as string,
-        quantity: Number(i.quantity ?? 1),
-        unit_price: i.unit_price,
-      }))
-
-    let catalogIds: Map<string, string>
-    try {
-      catalogIds = await this.catalogIdsFor(lines.map((l) => l.variant_id))
-    } catch (err) {
-      // Our own database, not Printful. Misreporting this sends the operator
-      // to Printful's status page during their own incident.
-      this.logger_.error(
-        `Printful rate lookup: variant query failed: ${
-          err instanceof Error ? err.message : String(err)
-        }`
-      )
-      return this.fallback(methodId, "query_unavailable")
-    }
-
-    // Resolved before the items are built: each line's `value` is denominated
-    // in the cart's currency, so it decides how the minor units convert out.
-    const currency = (ctx.currency_code ?? "").toUpperCase()
-
-    const items = buildRateItems(lines, catalogIds, currency)
-
-    if (!items.length) {
-      return this.fallback(methodId, "no_printful_items")
-    }
-
-    const recipient = {
-      country_code: countryCode,
-      ...(stateCode ? { state_code: stateCode } : {}),
-      ...(addr.city ? { city: addr.city } : {}),
-      ...(addr.postal_code ? { zip: addr.postal_code } : {}),
-      ...(addr.address_1 ? { address1: addr.address_1 } : {}),
-      ...(addr.address_2 ? { address2: addr.address_2 } : {}),
-    }
-
-    const cacheKey = buildRateCacheKey({ address: recipient, items, currency })
+    const { recipient, items, currency, cacheKey } = plan
 
     const cached = await this.readCache(cacheKey)
     // A negative age means the entry is dated in the future — clock skew on the
@@ -356,6 +293,52 @@ class PrintfulFulfillmentProviderService extends AbstractFulfillmentProviderServ
     }
 
     return this.priced(selected.amount, methodId, "live")
+  }
+
+  /**
+   * Build the Printful rate request and cache key for a cart context.
+   *
+   * The single seam `calculatePrice` and the confirm path both go through, so
+   * the two can never compute different cache keys for the same cart. It owns
+   * the parts that need the container — the `query` guard and the catalog-id
+   * lookup — and delegates the rest to the pure `buildRateRequest`.
+   */
+  private async planRateRequest(
+    ctx: RateContext
+  ): Promise<RateRequestPlan | { ok: false; reason: "query_unavailable" }> {
+    if (!this.query_) {
+      return { ok: false, reason: "query_unavailable" }
+    }
+
+    const addr = ctx.shipping_address ?? {}
+    const countryCode = (addr.country_code ?? "").toUpperCase()
+    const stateCode = resolveStateCode(addr.province, countryCode)
+
+    // The address guard runs before the query, so an unquotable address never
+    // costs a database round trip on every storefront cart refresh.
+    if (
+      !isAddressQuotable({ country_code: countryCode, state_code: stateCode })
+    ) {
+      return { ok: false, reason: "incomplete_address" }
+    }
+
+    const lines = rateLinesFrom(ctx)
+
+    let catalogIds: Map<string, string>
+    try {
+      catalogIds = await this.catalogIdsFor(lines.map((l) => l.variant_id))
+    } catch (err) {
+      // Our own database, not Printful. Misreporting this sends the operator
+      // to Printful's status page during their own incident.
+      this.logger_.error(
+        `Printful rate lookup: variant query failed: ${
+          err instanceof Error ? err.message : String(err)
+        }`
+      )
+      return { ok: false, reason: "query_unavailable" }
+    }
+
+    return buildRateRequest(ctx, lines, catalogIds, stateCode)
   }
 
   /** Look up Printful catalog variant ids for a set of Medusa variant ids. */
