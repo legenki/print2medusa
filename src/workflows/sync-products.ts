@@ -14,6 +14,11 @@ import { PRINTFUL_MODULE } from "../modules/printful"
 import type PrintfulModuleService from "../modules/printful/service"
 import { diffVariantsForUpsert, mapSyncProductToMedusa } from "../utils/mappers"
 import { OrphanTracker } from "../utils/orphans"
+import {
+  planStockActions,
+  resolveExistingProductWrite,
+  STOCK_MARKER_KEY,
+} from "../utils/stock"
 
 export type SyncProductsInput = {
   /** The claimed sync log. The workflow never claims — the route already did. */
@@ -98,18 +103,34 @@ const syncProductsStep = createStep(
         if (existingLink?.medusa_product_id) {
           const productId = existingLink.medusa_product_id
 
+          // Retrieved before the update so the current status and metadata are
+          // the merchant's, not ours. `mapped.status` is derived from Printful
+          // stock alone; writing it directly is what republished a product the
+          // merchant had deliberately drafted.
+          const product = await productModule.retrieveProduct(productId, {
+            relations: ["variants"],
+          })
+
+          const publication = resolveExistingProductWrite({
+            plan: planStockActions(detail.sync_variants),
+            currentStatus:
+              product.status === "published" ? "published" : "draft",
+            currentMetadata: (product.metadata ?? {}) as Record<
+              string,
+              unknown
+            >,
+            mappedMetadata: mapped.metadata,
+          })
+
           // Update core product fields.
           await productModule.updateProducts(productId, {
             title: mapped.title,
             thumbnail: mapped.thumbnail,
-            metadata: mapped.metadata,
-            status: mapped.status,
+            metadata: publication.metadata,
+            status: publication.status,
           })
 
           // Upsert variants so price/assortment changes in Printful reach Medusa.
-          const product = await productModule.retrieveProduct(productId, {
-            relations: ["variants"],
-          })
           const { toCreate, toUpdate } = diffVariantsForUpsert(
             mapped.variants,
             (product.variants ?? []).map((pv) => ({
@@ -195,6 +216,17 @@ const syncProductsStep = createStep(
             // ignore lookup errors
           }
 
+          // A product created already sold out is drafted by the mapper, but
+          // the mapper writes no marker — so without this the restock path
+          // would read it as a merchant's own draft and never republish it.
+          const createStock = planStockActions(detail.sync_variants)
+          const createMetadata: Record<string, unknown> = {
+            ...mapped.metadata,
+            ...(createStock.allUnavailable
+              ? { [STOCK_MARKER_KEY]: "unavailable" }
+              : {}),
+          }
+
           const { result } = await createProductsWorkflow(container).run({
             input: {
               products: [
@@ -214,7 +246,7 @@ const syncProductsStep = createStep(
                     manage_inventory: v.manage_inventory,
                     allow_backorder: v.allow_backorder,
                   })),
-                  metadata: mapped.metadata,
+                  metadata: createMetadata,
                   external_id: mapped.external_id,
                 },
               ],

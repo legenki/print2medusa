@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import {
   planStockActions,
+  resolveExistingProductWrite,
   resolvePublication,
   STOCK_MARKER_KEY,
 } from "../src/utils/stock"
@@ -189,5 +190,95 @@ describe("resolvePublication", () => {
 
     expect(restocked.status).toBe("draft")
     expect(restocked.changed).toBe(false)
+  })
+})
+
+describe("resolveExistingProductWrite", () => {
+  // These cover the decision the *sync workflow* makes for a product that
+  // already exists in Medusa. resolvePublication was fully unit-tested in
+  // 0.4.0 and still nothing called it — the workflow force-set the mapper's
+  // status instead. Testing the helper the workflow actually calls is what
+  // closes that gap.
+
+  const availablePlan = planStockActions([
+    variant(1, "active"),
+    variant(2, "active"),
+  ])
+  const soldOutPlan = planStockActions([
+    variant(1, "out_of_stock"),
+    variant(2, "discontinued"),
+  ])
+
+  it("leaves a merchant's unmarked draft alone when stock is available", () => {
+    // The headline bug: Printful says every variant is orderable, so the
+    // mapper's raw status is "published". The merchant drafted this product
+    // themselves and there is no plugin marker, so it is not ours to publish.
+    const result = resolveExistingProductWrite({
+      plan: availablePlan,
+      currentStatus: "draft",
+      currentMetadata: {},
+      mappedMetadata: { printful_sync_product_id: "77" },
+    })
+
+    expect(result.status).toBe("draft")
+    expect(result.metadata[STOCK_MARKER_KEY]).toBeUndefined()
+  })
+
+  it("republishes a draft the plugin marked, and clears the marker", () => {
+    const result = resolveExistingProductWrite({
+      plan: availablePlan,
+      currentStatus: "draft",
+      currentMetadata: { [STOCK_MARKER_KEY]: "unavailable" },
+      mappedMetadata: { printful_sync_product_id: "77" },
+    })
+
+    expect(result.status).toBe("published")
+    expect(result.metadata[STOCK_MARKER_KEY]).toBeUndefined()
+  })
+
+  it("drafts a published product that sold out, and marks it as ours", () => {
+    const result = resolveExistingProductWrite({
+      plan: soldOutPlan,
+      currentStatus: "published",
+      currentMetadata: {},
+      mappedMetadata: { printful_sync_product_id: "77" },
+    })
+
+    expect(result.status).toBe("draft")
+    expect(result.metadata[STOCK_MARKER_KEY]).toBe("unavailable")
+  })
+
+  it("keeps the Printful-derived metadata keys from the mapper", () => {
+    const result = resolveExistingProductWrite({
+      plan: availablePlan,
+      currentStatus: "published",
+      currentMetadata: { merchant_note: "keep me" },
+      mappedMetadata: {
+        printful_store_id: "store_1",
+        printful_sync_product_id: "77",
+        printful_discontinued: true,
+      },
+    })
+
+    expect(result.metadata.printful_store_id).toBe("store_1")
+    expect(result.metadata.printful_sync_product_id).toBe("77")
+    expect(result.metadata.printful_discontinued).toBe(true)
+    expect(result.metadata.merchant_note).toBe("keep me")
+  })
+
+  it("never returns the mapper's raw status for a merchant draft", () => {
+    // Guard against a regression to `status: mapped.status`. planStockActions
+    // returns "published" here; the write must still be "draft".
+    expect(availablePlan.status).toBe("published")
+
+    const result = resolveExistingProductWrite({
+      plan: availablePlan,
+      currentStatus: "draft",
+      currentMetadata: { merchant_note: "drafted on purpose" },
+      mappedMetadata: {},
+    })
+
+    expect(result.status).toBe("draft")
+    expect(result.metadata.merchant_note).toBe("drafted on purpose")
   })
 })

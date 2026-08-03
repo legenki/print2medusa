@@ -106,3 +106,48 @@ export function resolvePublication(input: PublicationInput): PublicationResult {
 
   return { status: "published", metadata, changed: false }
 }
+
+export type ProductSyncPublication = {
+  status: "published" | "draft"
+  metadata: Record<string, unknown>
+}
+
+/**
+ * Decide the status and metadata to write for a product that already exists in
+ * Medusa. The mapper's `status` is what Printful stock alone would imply; this
+ * reconciles it with what the merchant has since done to the product.
+ *
+ * The mapper's raw status is deliberately never returned. Writing it directly
+ * is what republished merchant drafts on every sync: it is derived from stock
+ * with no knowledge of who drafted the product or why.
+ */
+export function resolveExistingProductWrite(input: {
+  plan: StockPlan
+  currentStatus: "published" | "draft"
+  currentMetadata: Record<string, unknown>
+  mappedMetadata: Record<string, unknown>
+}): ProductSyncPublication {
+  const { plan, currentStatus, currentMetadata, mappedMetadata } = input
+
+  const publication = resolvePublication({
+    plan,
+    currentStatus,
+    currentMetadata,
+  })
+
+  // Printful-derived keys win over the stored copies of themselves, but the
+  // marker decision is made against the *current* metadata and must survive
+  // the merge — the mapper never writes STOCK_MARKER_KEY.
+  const metadata: Record<string, unknown> = {
+    ...publication.metadata,
+    ...mappedMetadata,
+  }
+
+  if (publication.metadata[STOCK_MARKER_KEY] === undefined) {
+    delete metadata[STOCK_MARKER_KEY]
+  } else {
+    metadata[STOCK_MARKER_KEY] = publication.metadata[STOCK_MARKER_KEY]
+  }
+
+  return { status: publication.status, metadata }
+}
