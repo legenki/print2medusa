@@ -59,6 +59,22 @@ describe("toMinorUnits", () => {
   it("accepts a negative amount, because a discount is legitimately negative", () => {
     expect(toMinorUnits(-4.99)).toBe(-499)
   })
+
+  it("leaves a zero-decimal amount at its major unit", () => {
+    // ¥1500 is fifteen hundred yen and Medusa stores 1500. Scaling by 100
+    // anyway would store ¥150,000 — a hundredfold overstatement of the cost.
+    expect(toMinorUnits(1500, "JPY")).toBe(1500)
+    expect(toMinorUnits("1500", "jpy")).toBe(1500)
+  })
+
+  it("still scales the same figure in a two-decimal currency", () => {
+    expect(toMinorUnits(1500, "USD")).toBe(150000)
+  })
+
+  it("treats an unknown or missing currency as two-decimal", () => {
+    expect(toMinorUnits(12.34, "ZZZ")).toBe(1234)
+    expect(toMinorUnits(12.34, undefined)).toBe(1234)
+  })
 })
 
 describe("toMinorUnits rounding properties", () => {
@@ -155,6 +171,35 @@ describe("planCostMetadata", () => {
       order({ currency: "USD", digitization: "2.50", total: 15 })
     )
     expect(meta["printful_cost_digitization"]).toBe(250)
+  })
+
+  it("stores a zero-decimal cost at its major unit", () => {
+    const meta = planCostMetadata(
+      order({ currency: "JPY", subtotal: 1200, shipping: 300, total: 1500 })
+    )
+    expect(meta[COST_TOTAL_KEY]).toBe(1500)
+    expect(meta["printful_cost_shipping"]).toBe(300)
+    expect(meta[COST_CURRENCY_KEY]).toBe("jpy")
+  })
+
+  it("computes a zero-decimal margin without scaling either side", () => {
+    const meta = planCostMetadata(
+      order({ currency: "JPY", total: 1500 }, { currency: "JPY", total: 2500 })
+    )
+    expect(meta[COST_TOTAL_KEY]).toBe(1500)
+    expect(meta[RETAIL_TOTAL_KEY]).toBe(2500)
+    expect(meta[MARGIN_KEY]).toBe(1000)
+  })
+
+  it("scales cost and retail each by its own currency when they differ", () => {
+    // The two are legitimately in different currencies — that is why margin is
+    // withheld. Scaling both by one shared factor would corrupt one of them.
+    const meta = planCostMetadata(
+      order({ currency: "JPY", total: 1500 }, { currency: "USD", total: 25 })
+    )
+    expect(meta[COST_TOTAL_KEY]).toBe(1500)
+    expect(meta[RETAIL_TOTAL_KEY]).toBe(2500)
+    expect(meta[MARGIN_KEY]).toBeUndefined()
   })
 })
 

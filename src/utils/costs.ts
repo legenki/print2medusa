@@ -1,3 +1,4 @@
+import { minorUnitFactor } from "./currency"
 import type { PrintfulOrder } from "./types"
 
 /**
@@ -5,12 +6,18 @@ import type { PrintfulOrder } from "./types"
  * stores integer minor units (1234). Everything crossing that boundary goes
  * through here.
  *
+ * The scale factor is the currency's, not a fixed 100: ¥1500 is fifteen
+ * hundred yen and Medusa stores 1500, so a zero-decimal amount passes through
+ * unscaled. An absent or unrecognized currency scales by 100, which is the
+ * behaviour every caller had before currency was threaded through.
+ *
  * `undefined` means "we could not trust this value" and is deliberately
  * distinct from `0`. Reporting an unparseable cost as zero would show the
  * owner a 100% margin on an order that in fact cost them money.
  */
 export function toMinorUnits(
-  value: string | number | null | undefined
+  value: string | number | null | undefined,
+  currencyCode?: string | null
 ): number | undefined {
   if (value === null || value === undefined || value === "") {
     return 0
@@ -31,7 +38,7 @@ export function toMinorUnits(
     return undefined
   }
 
-  return Math.round(n * 100)
+  return Math.round(n * minorUnitFactor(currencyCode))
 }
 
 export const COST_CURRENCY_KEY = "printful_cost_currency"
@@ -96,12 +103,12 @@ export function planCostMetadata(
     if (costCurrency) {
       metadata[COST_CURRENCY_KEY] = costCurrency
     }
-    const total = toMinorUnits(costs.total)
+    const total = toMinorUnits(costs.total, costCurrency)
     if (total !== undefined) {
       metadata[COST_TOTAL_KEY] = total
     }
     for (const field of COST_FIELDS) {
-      const value = toMinorUnits(costs[field])
+      const value = toMinorUnits(costs[field], costCurrency)
       // Assigned unconditionally: a zero, unparseable, or absent fee has to
       // land as `undefined` so the spread clears any stale value rather than
       // leaving it beside a fresher total.
@@ -114,7 +121,10 @@ export function planCostMetadata(
     if (retailCurrency) {
       metadata[RETAIL_CURRENCY_KEY] = retailCurrency
     }
-    const total = toMinorUnits(retail.total)
+    // Scaled by the retail currency, not the cost currency. The two can
+    // legitimately differ — that is exactly why margin is withheld below — so
+    // sharing one factor would corrupt whichever object did not own it.
+    const total = toMinorUnits(retail.total, retailCurrency)
     if (total !== undefined) {
       metadata[RETAIL_TOTAL_KEY] = total
     }

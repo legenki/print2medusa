@@ -1,6 +1,7 @@
 import { defineWidgetConfig } from "@medusajs/admin-sdk"
 import type { AdminOrder, DetailWidgetProps } from "@medusajs/framework/types"
 import { Badge, Container, Heading, Text } from "@medusajs/ui"
+import { minorUnitFactor } from "../../utils/currency"
 
 type PrintfulShipment = {
   id: string
@@ -20,13 +21,19 @@ type PrintfulShipment = {
 /** Printful states that mean a human should look at the order; mirrors order-state.ts. */
 const ATTENTION_STATES = new Set(["failed", "canceled", "onhold"])
 
-/** Minor units to a display string. 1500 with "usd" becomes "15.00 USD". */
+/**
+ * Minor units to a display string. 1500 with "usd" becomes "15.00 USD"; the
+ * same 1500 with "jpy" becomes "1500 JPY", because yen has no subunit — it is
+ * stored unscaled and "1500.00 JPY" would be a malformed amount.
+ */
 const formatMinor = (amount: unknown, currency: unknown): string | null => {
   if (typeof amount !== "number" || !Number.isFinite(amount)) {
     return null
   }
   const code = typeof currency === "string" ? currency.toUpperCase() : ""
-  return `${(amount / 100).toFixed(2)}${code ? ` ${code}` : ""}`
+  const factor = minorUnitFactor(typeof currency === "string" ? currency : null)
+  const decimals = factor === 1 ? 0 : 2
+  return `${(amount / factor).toFixed(decimals)}${code ? ` ${code}` : ""}`
 }
 
 const PrintfulOrderWidget = ({ data }: DetailWidgetProps<AdminOrder>) => {
