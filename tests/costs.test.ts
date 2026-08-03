@@ -158,6 +158,46 @@ describe("planCostMetadata", () => {
   })
 })
 
+describe("planCostMetadata namespace refresh", () => {
+  it("clears a fee the second response omitted rather than leaving it stale", () => {
+    // The bug this pins: both call sites merge per-key into existing metadata,
+    // so a first stamp carrying `shipping` followed by a re-read that dropped it
+    // used to leave the old fee sitting beside a brand new total.
+    const first = planCostMetadata(
+      order({ currency: "USD", subtotal: 10, shipping: 5, total: 15 })
+    )
+    expect(first["printful_cost_shipping"]).toBe(500)
+
+    const second = planCostMetadata(
+      order({ currency: "USD", subtotal: 18, total: 18 })
+    )
+    const merged = { ...first, ...second }
+
+    expect(merged[COST_TOTAL_KEY]).toBe(1800)
+    expect(merged["printful_cost_shipping"]).toBeUndefined()
+    // The key may still be present carrying `undefined`; what matters is that
+    // JSON serialization into the jsonb metadata column drops it entirely.
+    expect(JSON.parse(JSON.stringify(merged))).not.toHaveProperty(
+      "printful_cost_shipping"
+    )
+  })
+
+  it("emits an explicit undefined for every fee it did not write", () => {
+    const meta = planCostMetadata(order({ currency: "USD", total: 15 }))
+    // Present-but-undefined is the mechanism: a bare omission would not
+    // overwrite the stale key when spread over existing metadata.
+    expect(meta).toHaveProperty("printful_cost_shipping")
+    expect(meta["printful_cost_shipping"]).toBeUndefined()
+  })
+
+  it("still writes nothing at all when the order carries no costs", () => {
+    // No costs and no retail means we know nothing, so we must not clear
+    // fees a previous, better-informed response legitimately stored.
+    const meta = planCostMetadata({ id: 1, status: "draft" } as PrintfulOrder)
+    expect(meta).toEqual({})
+  })
+})
+
 describe("planCreatedOrderMetadata", () => {
   it("stamps the identity keys alongside the costs", () => {
     const meta = planCreatedOrderMetadata(

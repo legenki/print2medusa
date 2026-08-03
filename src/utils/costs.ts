@@ -61,6 +61,22 @@ const COST_FIELDS = [
  * Every amount is in minor units. A field that could not be parsed is omitted
  * rather than defaulted, so a partial Printful response never turns into a
  * confidently wrong margin.
+ *
+ * Fee keys are a namespace, not a set of independent values: both call sites
+ * merge the result over the order's existing metadata, so a fee this response
+ * does not carry is emitted as an explicit `undefined` to overwrite whatever a
+ * previous response left there. Without it a refresh that dropped `shipping`
+ * would leave the old shipping fee sitting beside a brand new total.
+ *
+ * `undefined` rather than `null` is deliberate and was checked against a real
+ * Postgres: the `undefined` survives the object spread (so it does overwrite
+ * the stale value) and is then dropped by JSON serialization into the jsonb
+ * metadata column, so the key disappears entirely. `null` would instead
+ * persist as a literal null sitting in the metadata forever.
+ *
+ * The one case that clears nothing is an order with no cost data at all: an
+ * empty patch means "we learned nothing", which must not wipe fees an earlier,
+ * better-informed response legitimately stored.
  */
 export function planCostMetadata(
   order: PrintfulOrder
@@ -86,9 +102,11 @@ export function planCostMetadata(
     }
     for (const field of COST_FIELDS) {
       const value = toMinorUnits(costs[field])
-      if (value !== undefined && value !== 0) {
-        metadata[`printful_cost_${field}`] = value
-      }
+      // Assigned unconditionally: a zero, unparseable, or absent fee has to
+      // land as `undefined` so the spread clears any stale value rather than
+      // leaving it beside a fresher total.
+      metadata[`printful_cost_${field}`] =
+        value !== undefined && value !== 0 ? value : undefined
     }
   }
 
