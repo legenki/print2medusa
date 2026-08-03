@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.5.3
+
+Order visibility and honest sync reporting, from a second external review.
+
+### Fixed
+
+- **The Printful panel appears as soon as the order is created.** The create
+  path wrote only cost keys, but the order widget gates on
+  `printful_order_id` — so the order existed in Printful, its costs were
+  stored, and the merchant saw nothing until the first webhook arrived.
+- **A sync with failures no longer reports success.** The old rule demanded
+  zero creates _and_ zero updates before calling a run failed, so 100 failures
+  beside one successful update showed a green sync. Such a run is now
+  `partial`.
+- **A fee Printful stops reporting is cleared.** Fee keys were merged per-key,
+  so a shipping fee that dropped out of a later response kept its old value
+  beside a fresh total. A refresh now clears the fee keys it did not write.
+- **The create path takes the same advisory lock as webhooks.** Both do a
+  read-modify-write of order metadata, and a webhook arriving between the link
+  becoming resolvable and this write could have its newer `printful_status`
+  clobbered back to the status captured at creation.
+
+### Known limits
+
+- **Zero-decimal currencies are wrong in more places than 0.5.0 recorded.**
+  `parsePriceToMinorUnits` — which prices the **catalog** — carries the same
+  unconditional ×100 as the cost converter, so a JPY Printful store gets
+  product prices a hundredfold too large as well. The order page cancels the
+  error for costs by dividing by 100; nothing cancels it for catalog prices.
+  The fix must change storage, catalog pricing and the widget together, and
+  stamp a scale version so already-written values can be told apart.
+
 ## 0.5.2
 
 Closes the known limit 0.5.1 left open.
@@ -74,11 +106,14 @@ What each order cost and what it earned, visible on the order page.
   `printful_cost_total: 150000`, because JPY, KRW and the other ISO 4217
   exponent-0 currencies have no minor unit. The order page displays the correct
   figure — it divides by 100, cancelling the error — but any other reader of
-  that metadata gets a hundredfold overstatement.
+  that metadata gets a hundredfold overstatement. **Wider than first recorded:**
+  catalog prices share the same converter, so a JPY store's product prices are
+  affected too. See 0.5.3.
 - **The per-fee breakdown can drift from the total.** Fee keys are merged
   per-key, so a fee absent from a later Printful response keeps its previous
   value beside a fresh total. The order page shows only the two totals and the
   margin, which are always written together, and never the breakdown.
+  **Fixed in 0.5.3.**
 - **An unparseable fee is indistinguishable from a fee of zero** — both simply
   omit the key. An unparseable _total_ is handled properly: it suppresses the
   margin rather than fabricating one.
