@@ -227,3 +227,30 @@ describe("planOrderStateActions", () => {
     expect(shipments[0].reshipment).toBe(false)
   })
 })
+
+describe("planOrderStateActions costs", () => {
+  it("includes cost metadata so a webhook refreshes the margin", () => {
+    // Printful finalizes shipping and fees at fulfillment, so the figures
+    // stamped at creation are provisional. Re-reading the order is the only
+    // moment we learn the real ones.
+    const plan = planOrderStateActions(
+      {
+        id: 1,
+        status: "fulfilled",
+        costs: { currency: "USD", total: 15 },
+        retail_costs: { currency: "USD", total: 25 },
+      } as never,
+      []
+    )
+    expect(plan.metadata.printful_cost_total).toBe(1500)
+    expect(plan.metadata.printful_margin).toBe(1000)
+  })
+
+  it("leaves cost keys out when the order carries no costs", () => {
+    const plan = planOrderStateActions(
+      { id: 1, status: "pending" } as never,
+      []
+    )
+    expect(plan.metadata.printful_cost_total).toBeUndefined()
+  })
+})

@@ -1,4 +1,5 @@
 import type { PrintfulOrder } from "./types"
+import { planCostMetadata } from "./costs"
 
 export type PlannedShipmentItem = {
   /** Printful line item id; join to Medusa via the order item's external_id. */
@@ -70,6 +71,9 @@ export function planOrderStateActions(
       (s) => !recorded.has(s.printful_shipment_id)
     ),
     metadata: {
+      // Spread first so a status key always wins a name collision rather than
+      // being silently overwritten by a cost key.
+      ...planCostMetadata(order),
       printful_order_id: String(order.id),
       printful_status: order.status,
       printful_status_updated_at: new Date().toISOString(),
