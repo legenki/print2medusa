@@ -273,6 +273,28 @@ unpublished itself — a product you set to draft by hand stays draft. Variants
 carry `printful_availability_status` in metadata, and discontinued products get
 `printful_discontinued` unless `onDiscontinued: "ignore"`.
 
+## Order economics
+
+Printful returns what it charged along with the created order, so the plugin
+stores it on the Medusa order rather than making a second API call. The order
+page shows the Printful cost, the retail total, and the margin between them.
+The figures are refreshed whenever a webhook re-reads the order, because
+Printful finalizes shipping and fees at fulfillment.
+
+Amounts are stored in minor units under `printful_cost_*`, `printful_retail_*`
+and `printful_margin` in order metadata.
+
+**Margin is only shown when both figures are in the same currency.** If
+Printful bills in USD while the order is in EUR, both totals are stored and the
+margin is withheld — converting would need an exchange rate this plugin does
+not have, and a margin built on a guessed rate is worse than none.
+
+The order page deliberately shows only the two totals and the margin, not the
+per-fee breakdown. Those three are always written together from one response,
+so they cannot disagree; the individual `printful_cost_*` fee keys are refreshed
+per-key and a fee absent from a later response keeps its previous value, so a
+breakdown need not sum to the total.
+
 ## Admin usage
 
 1. Create products in Printful (Store Products).

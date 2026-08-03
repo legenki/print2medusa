@@ -1,5 +1,42 @@
 # Changelog
 
+## 0.5.0
+
+What each order cost and what it earned, visible on the order page.
+
+### Added
+
+- **Printful costs on the Medusa order.** The cost breakdown and retail totals
+  are stored in order metadata in minor units, taken from the order response
+  Printful already returns — no extra API call.
+- **Margin on the order page**, when the Printful currency matches the order's.
+- **Costs refresh from webhooks**, so the figures reflect the shipping and fees
+  Printful finalizes at fulfillment rather than the provisional ones.
+
+### Known limits
+
+- **No currency conversion.** When Printful bills in a different currency than
+  the order, both totals are stored but the margin is withheld.
+- **Zero-decimal currencies are stored 100× too large.** A ¥1500 order stores
+  `printful_cost_total: 150000`, because JPY, KRW and the other ISO 4217
+  exponent-0 currencies have no minor unit. The order page displays the correct
+  figure — it divides by 100, cancelling the error — but any other reader of
+  that metadata gets a hundredfold overstatement.
+- **The per-fee breakdown can drift from the total.** Fee keys are merged
+  per-key, so a fee absent from a later Printful response keeps its previous
+  value beside a fresh total. The order page shows only the two totals and the
+  margin, which are always written together, and never the breakdown.
+- **An unparseable fee is indistinguishable from a fee of zero** — both simply
+  omit the key. An unparseable _total_ is handled properly: it suppresses the
+  margin rather than fabricating one.
+- **Returns are not implemented.** Printful API v1 has no endpoint for creating
+  a return or generating a return label — only a `package_returned` webhook
+  reporting one that already happened. `createReturnFulfillment` therefore
+  remains a stub. Real returns need API v2 and are deferred to 1.0.0.
+- **No tax provider.** `/tax/rates` exists in Printful API v1, but its request
+  and response contract is undocumented, so `ITaxProvider` is deferred until
+  the contract can be established against the live API.
+
 ## 0.4.0
 
 The catalog sync runs in the background, one at a time, and Printful stock

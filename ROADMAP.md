@@ -9,7 +9,7 @@ plugin in a working state. The testing strategy tightens as the API surface grow
 
 |                       |                                          |
 | --------------------- | ---------------------------------------- |
-| Published version     | `0.4.0`                                  |
+| Published version     | `0.5.0`                                  |
 | Tests                 | 192 (179 unit, 13 integration)           |
 | Printful API coverage | 6 of 15 endpoint groups                  |
 | Test layers           | unit + integration against real Postgres |
@@ -143,37 +143,44 @@ We also cannot see Printful stock: an item can sell out while the store keeps se
 
 ---
 
-## 0.5.0 — Returns, taxes, and cost `next`
+## 0.5.0 — Order economics `shipped`
 
-Order economics: what the store actually earned, who owes tax, what happens on a
-return. `createReturnFulfillment` is a stub today.
+What each order cost and what it earned, on the order page.
 
-### API surface
+**Scope changed during implementation.** Returns and taxes were planned here and
+moved out for reasons found in Printful's API, recorded below.
 
-| Endpoint                      | Purpose                             |
-| ----------------------------- | ----------------------------------- |
-| `POST /tax/rates`             | Address-based tax (Tax Provider)    |
-| `GET /tax/countries`          | Where Printful calculates tax       |
-| `POST /orders/estimate-costs` | Cost of goods before order creation |
-| `GET /reports/statistics`     | Sales summary for the admin         |
+### Shipped
 
-### Scope
+- Printful `costs` and `retail_costs` stored on the Medusa order in minor units
+- Margin on the order page, withheld when the two currencies differ
+- Costs refreshed on every webhook, since Printful finalizes fees at fulfillment
 
-- Real returns through `createReturnFulfillment` with a return label
-- Optional Tax Provider (`ITaxProvider.getTaxLines`) backed by Printful rates
-- Store cost of goods in order metadata so margin is visible in the admin
-- Dedicated "Printful" admin page: statistics, sync history, webhook health
+### Moved out, and why
+
+- **Returns → `1.0.0`.** Printful API v1 has **no returns endpoint** — verified
+  against their OpenAPI spec (zero paths matching `return`) and their published
+  docs. Only a `package_returned` webhook, reporting one that already happened.
+  `createReturnFulfillment` stays a stub until API v2.
+- **Tax Provider → deferred.** `/tax/rates` and `/tax/countries` exist, but
+  their schemas are empty in the OpenAPI spec and the docs do not describe the
+  fields — not even whether a rate or an amount is returned. Implementing
+  `ITaxProvider` against an unknown contract risks charging customers the wrong
+  tax, so it needs a live-API investigation first.
+- **`/orders/estimate-costs` → not needed.** The created order already carries
+  `costs`, so using the real figure avoids both a second call and any
+  estimate-versus-actual drift.
+- **Admin statistics page → its own release.** Independent subsystem.
 
 ### Testing — adds monetary precision
 
-- **Rounding:** tax and margin in minor units — no float drift across 1000 generated amounts
+- **Rounding:** no float drift across 1000 generated amounts, mutation-proved
+  (`Math.trunc` produces 69 mismatches)
 - Multi-currency: an EUR order against USD Printful pricing
-- Returns: partial (1 of 3 items) and full, both idempotent
-- Reconciliation: Medusa order total equals Printful order total plus markup
 
 ---
 
-## 1.0.0 — Stable API and v2 migration
+## 1.0.0 — Stable API and v2 migration `next`
 
 Freeze the plugin's public contract and migrate to Printful API v2, already in
 open beta: signed webhooks, real-time stock, detailed tracking with estimated
@@ -182,6 +189,7 @@ delivery dates.
 ### Scope
 
 - Client abstraction layer: v1 and v2 behind one interface, switchable by option
+- **Real returns** with a return label — impossible on v1, which has no returns endpoint
 - Multi-store support — `storeId` already exists in the link models; finish it
 - Mockup Generator: generate previews during sync (`/mockups`)
 - Public contract: exported types, documented option semantics, deprecation policy
@@ -205,7 +213,7 @@ delivery dates.
 | `0.2.0` | Route integration          | HTTP contract, webhook idempotency       |
 | `0.3.0` | Contract + resilience      | Printful schema drift, checkout breakage |
 | `0.4.0` | Load + concurrency         | Timeouts, compensation, concurrent sync  |
-| `0.5.0` | Property-based on money    | Rounding, multi-currency                 |
+| `0.5.0` | Property-based on money    | Rounding drift, multi-currency margin    |
 | `1.0.0` | E2E + compatibility matrix | Upgrade regressions, v1/v2 parity        |
 
 ## Why this order
