@@ -291,7 +291,10 @@ The figures are refreshed whenever a webhook re-reads the order, because
 Printful finalizes shipping and fees at fulfillment.
 
 Amounts are stored in minor units under `printful_cost_*`, `printful_retail_*`
-and `printful_margin` in order metadata.
+and `printful_margin` in order metadata, scaled by the currency's own subunit —
+$12.34 stores as `1234`, ¥1500 stores as `1500`. `printful_money_scale` records
+which rule produced them; orders written before 0.6.0 carry no marker and were
+scaled by 100 whatever their currency.
 
 **Margin is only shown when both figures are in the same currency.** If
 Printful bills in USD while the order is in EUR, both totals are stored and the

@@ -1,5 +1,56 @@
 # Changelog
 
+## 0.6.0
+
+Money is scaled by the currency instead of always by 100.
+
+### Fixed
+
+Most currencies have 100 minor units to the major unit — $12.34 stores as
+`1234`. Zero-decimal currencies have none: ¥1500 is fifteen hundred yen, and
+Medusa stores `1500`. The plugin multiplied by 100 regardless, so a store
+selling in JPY, KRW, HUF, ISK, CLP or any of the other 38 zero-decimal
+currencies got values a hundredfold wrong.
+
+Five places crossed between major and minor units. All now consult the
+currency, using Medusa's own `defaultCurrencies` table rather than a
+hand-written list:
+
+- **Order costs** stored on the Medusa order
+- **Catalog prices** written during sync — this one had no compensating error
+  anywhere, so a JPY store's product prices were simply wrong
+- **The order page**, which divided by 100 unconditionally. This cancelled the
+  cost error, which is why the order page looked correct while the stored data
+  was not
+- **Shipping rates** returned to Medusa from a Printful quote
+- **Cart line values sent to Printful** when requesting a quote, which
+  under-reported a JPY cart's value by 100× and affects both the rate Printful
+  calculates and the customs value it declares
+
+### Added
+
+- **`printful_money_scale` on order metadata.** Orders stamped before 0.6.0
+  carry no marker, and nothing in the data distinguishes a JPY order holding
+  `150000` from a correct `150000` in a currency that has minor units. The
+  order page reads the marker and keeps the old rule for unmarked orders, so
+  they still display correctly.
+
+### Upgrading
+
+**Nothing migrates automatically, by design.** A store that has only ever sold
+in USD, EUR or any other two-decimal currency has nothing wrong and needs to do
+nothing.
+
+If you have sold in a zero-decimal currency:
+
+- **Order costs** correct themselves the next time a webhook re-reads the
+  order, which restamps both the amounts and the marker.
+- **Catalog prices** correct themselves on the next sync.
+- Values written before this release stay as they are until then. A blind
+  division by 100 was deliberately not shipped: it would corrupt anything a
+  merchant had already corrected by hand, and there is no way to tell the two
+  apart.
+
 ## 0.5.3
 
 Order visibility and honest sync reporting, from a second external review.
@@ -27,10 +78,7 @@ Order visibility and honest sync reporting, from a second external review.
 - **Zero-decimal currencies are wrong in more places than 0.5.0 recorded.**
   `parsePriceToMinorUnits` — which prices the **catalog** — carries the same
   unconditional ×100 as the cost converter, so a JPY Printful store gets
-  product prices a hundredfold too large as well. The order page cancels the
-  error for costs by dividing by 100; nothing cancels it for catalog prices.
-  The fix must change storage, catalog pricing and the widget together, and
-  stamp a scale version so already-written values can be told apart.
+  product prices a hundredfold too large as well. **Fixed in 0.6.0.**
 
 ## 0.5.2
 
@@ -106,9 +154,9 @@ What each order cost and what it earned, visible on the order page.
   `printful_cost_total: 150000`, because JPY, KRW and the other ISO 4217
   exponent-0 currencies have no minor unit. The order page displays the correct
   figure — it divides by 100, cancelling the error — but any other reader of
-  that metadata gets a hundredfold overstatement. **Wider than first recorded:**
-  catalog prices share the same converter, so a JPY store's product prices are
-  affected too. See 0.5.3.
+  that metadata gets a hundredfold overstatement. **Fixed in 0.6.0**, which
+  scales by the currency and stamps `printful_money_scale` so values written
+  before it can still be read correctly.
 - **The per-fee breakdown can drift from the total.** Fee keys are merged
   per-key, so a fee absent from a later Printful response keeps its previous
   value beside a fresh total. The order page shows only the two totals and the

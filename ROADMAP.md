@@ -9,8 +9,8 @@ plugin in a working state. The testing strategy tightens as the API surface grow
 
 |                       |                                          |
 | --------------------- | ---------------------------------------- |
-| Published version     | `0.5.3`                                  |
-| Tests                 | 283 (262 unit, 21 integration)           |
+| Published version     | `0.6.0`                                  |
+| Tests                 | 306 (285 unit, 21 integration)           |
 | Printful API coverage | 6 of 15 endpoint groups                  |
 | Test layers           | unit + integration against real Postgres |
 
