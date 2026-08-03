@@ -119,3 +119,31 @@ export function planCostMetadata(
 
   return metadata
 }
+
+/**
+ * Build the order-metadata patch for an order Printful has just created.
+ *
+ * The identity keys matter as much as the costs: the admin order widget gates
+ * its entire render on `printful_order_id`, so without them a freshly created
+ * order shows the merchant no Printful panel at all until the first webhook
+ * arrives — even though the order exists in Printful and its costs are stored.
+ *
+ * The key names deliberately match `planOrderStateActions`, so the webhook path
+ * later overwrites these values rather than writing a parallel set.
+ *
+ * `printful_status_updated_at` is *not* stamped here. It is the "Last synced"
+ * breadcrumb, meaning "when we last re-read the order from Printful". Creation
+ * is not a re-read, and claiming it was would date a status that no webhook has
+ * yet confirmed. The first real sync sets it.
+ */
+export function planCreatedOrderMetadata(
+  order: PrintfulOrder
+): Record<string, unknown> {
+  return {
+    // Spread first so an identity key always wins a name collision rather than
+    // being silently overwritten by a cost key.
+    ...planCostMetadata(order),
+    printful_order_id: String(order.id),
+    printful_status: order.status,
+  }
+}

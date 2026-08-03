@@ -13,7 +13,7 @@ import type {
   PrintfulRecipient,
 } from "../utils/types"
 import { resolveStateCode } from "../utils/mappers"
-import { planCostMetadata } from "../utils/costs"
+import { planCreatedOrderMetadata } from "../utils/costs"
 
 export type CreatePrintfulOrderInput = {
   order_id: string
@@ -158,27 +158,31 @@ const createPrintfulOrderStep = createStep(
     })
 
     // Printful returns the real costs with the created order, so no separate
-    // estimate call is needed. Written best-effort: the order exists in
-    // Printful either way, and losing the margin figure must never fail the
-    // workflow and roll back a real order.
-    const costMetadata = planCostMetadata(pfOrder)
-    if (Object.keys(costMetadata).length > 0) {
-      try {
-        // `orderRow` rather than `existing` — that name is taken by the
-        // order-link lookup earlier in this step.
-        const orderRow = await orderModule.retrieveOrder(input.order_id, {
-          select: ["id", "metadata"],
-        })
-        await orderModule.updateOrders(input.order_id, {
-          metadata: { ...(orderRow.metadata ?? {}), ...costMetadata },
-        })
-      } catch (err) {
-        logger.error(
-          `Printful order ${pfOrder.id}: could not store costs: ${
-            err instanceof Error ? err.message : String(err)
-          }`
-        )
-      }
+    // estimate call is needed. The identity keys ride along unconditionally —
+    // the admin widget gates on `printful_order_id`, so a costless order that
+    // wrote only costs would stay invisible until the first webhook.
+    //
+    // Written best-effort: the order exists in Printful either way, and losing
+    // the margin figure must never fail the workflow and roll back a real
+    // order. Both the Printful order and the link row exist by this point, so
+    // failing the step would trigger compensation and release the link for an
+    // order Printful is already fulfilling.
+    const orderMetadata = planCreatedOrderMetadata(pfOrder)
+    try {
+      // `orderRow` rather than `existing` — that name is taken by the
+      // order-link lookup earlier in this step.
+      const orderRow = await orderModule.retrieveOrder(input.order_id, {
+        select: ["id", "metadata"],
+      })
+      await orderModule.updateOrders(input.order_id, {
+        metadata: { ...(orderRow.metadata ?? {}), ...orderMetadata },
+      })
+    } catch (err) {
+      logger.error(
+        `Printful order ${pfOrder.id}: could not store order metadata: ${
+          err instanceof Error ? err.message : String(err)
+        }`
+      )
     }
 
     return new StepResponse<CreateResult>({

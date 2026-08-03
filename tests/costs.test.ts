@@ -6,8 +6,10 @@ import {
   RETAIL_CURRENCY_KEY,
   RETAIL_TOTAL_KEY,
   planCostMetadata,
+  planCreatedOrderMetadata,
   toMinorUnits,
 } from "../src/utils/costs"
+import { planOrderStateActions } from "../src/utils/order-state"
 import type { PrintfulOrder } from "../src/utils/types"
 
 describe("toMinorUnits", () => {
@@ -153,6 +155,59 @@ describe("planCostMetadata", () => {
       order({ currency: "USD", digitization: "2.50", total: 15 })
     )
     expect(meta["printful_cost_digitization"]).toBe(250)
+  })
+})
+
+describe("planCreatedOrderMetadata", () => {
+  it("stamps the identity keys alongside the costs", () => {
+    const meta = planCreatedOrderMetadata(
+      order({ currency: "USD", total: 15 }, { currency: "USD", total: 25 })
+    )
+    expect(meta["printful_order_id"]).toBe("1")
+    expect(meta["printful_status"]).toBe("fulfilled")
+    expect(meta[COST_TOTAL_KEY]).toBe(1500)
+    expect(meta[MARGIN_KEY]).toBe(1000)
+  })
+
+  it("stamps the identity keys even when the order carries no costs", () => {
+    // The whole point of the fix: a costless order must still become visible
+    // in the admin widget, which gates entirely on printful_order_id.
+    const meta = planCreatedOrderMetadata({
+      id: 42,
+      status: "draft",
+    } as PrintfulOrder)
+    expect(meta["printful_order_id"]).toBe("42")
+    expect(meta["printful_status"]).toBe("draft")
+  })
+
+  it("coerces a numeric Printful id to the string the widget reads", () => {
+    const meta = planCreatedOrderMetadata({
+      id: 12345,
+      status: "pending",
+    } as PrintfulOrder)
+    expect(meta["printful_order_id"]).toBe("12345")
+  })
+
+  it("does not stamp the sync breadcrumb, which belongs to the webhook path", () => {
+    const meta = planCreatedOrderMetadata({
+      id: 1,
+      status: "draft",
+    } as PrintfulOrder)
+    expect(meta).not.toHaveProperty("printful_status_updated_at")
+  })
+
+  it("uses the same keys planOrderStateActions writes, so a webhook overwrites", () => {
+    // If these drifted apart the webhook would write a parallel set of keys and
+    // the widget would show whichever one it happened to read.
+    const pfOrder = order({ currency: "USD", total: 15 })
+    const created = planCreatedOrderMetadata(pfOrder)
+    const fromWebhook = planOrderStateActions(pfOrder, []).metadata
+
+    for (const key of Object.keys(created)) {
+      expect(fromWebhook).toHaveProperty(key)
+    }
+    expect(fromWebhook["printful_order_id"]).toBe(created["printful_order_id"])
+    expect(fromWebhook["printful_status"]).toBe(created["printful_status"])
   })
 })
 
