@@ -288,13 +288,16 @@ class PrintfulFulfillmentProviderService extends AbstractFulfillmentProviderServ
       return this.fallback(methodId, "query_unavailable")
     }
 
-    const items = buildRateItems(lines, catalogIds)
+    // Resolved before the items are built: each line's `value` is denominated
+    // in the cart's currency, so it decides how the minor units convert out.
+    const currency = (ctx.currency_code ?? "").toUpperCase()
+
+    const items = buildRateItems(lines, catalogIds, currency)
 
     if (!items.length) {
       return this.fallback(methodId, "no_printful_items")
     }
 
-    const currency = (ctx.currency_code ?? "").toUpperCase()
     const recipient = {
       country_code: countryCode,
       ...(stateCode ? { state_code: stateCode } : {}),

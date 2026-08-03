@@ -3,6 +3,7 @@ import type {
   PrintfulSyncProductDetail,
   PrintfulSyncVariant,
 } from "./types"
+import { minorUnitFactor } from "./currency"
 import { DISCONTINUED_MARKER_KEY, planStockActions } from "./stock"
 
 export type MedusaProductOptionInput = {
@@ -215,8 +216,16 @@ export function slugify(value: string): string {
   )
 }
 
+/**
+ * Printful's decimal price string to Medusa minor units.
+ *
+ * The factor is the currency's: a JPY store quoting "1500" means ¥1500, which
+ * Medusa stores as 1500, not 150000. An absent or unrecognized currency scales
+ * by 100 — the behaviour every caller had before currency was threaded here.
+ */
 export function parsePriceToMinorUnits(
-  price: string | null | undefined
+  price: string | null | undefined,
+  currencyCode?: string | null
 ): number {
   if (!price) {
     return 0
@@ -225,9 +234,14 @@ export function parsePriceToMinorUnits(
   if (Number.isNaN(n)) {
     return 0
   }
-  return Math.round(n * 100)
+  return Math.round(n * minorUnitFactor(currencyCode))
 }
 
+/**
+ * Markup is a ratio, so it is unit-agnostic and needs no currency: 1500 JPY
+ * minor units plus 30% is 1950 JPY minor units, the same arithmetic that turns
+ * 1500 cents into 1950 cents. It must run on an already-converted amount.
+ */
 export function applyMarkup(
   amountMinor: number,
   markupPercent?: number
@@ -362,7 +376,9 @@ export function mapSyncProductToMedusa(
     optionValuesFromVariants(sync_variants)
 
   const variants: MedusaVariantInput[] = sync_variants.map((v, i) => {
-    const base = parsePriceToMinorUnits(v.retail_price)
+    // `currency` is the same code these prices are stored under, so the scale
+    // factor and the `currency_code` below can never disagree.
+    const base = parsePriceToMinorUnits(v.retail_price, currency)
     const amount = applyMarkup(base, options.markupPercent)
     return {
       title: v.name,

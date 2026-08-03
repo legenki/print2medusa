@@ -214,6 +214,18 @@ describe("selectRate", () => {
     })
   })
 
+  it("keeps a zero-decimal quote at its major unit", () => {
+    // ¥800 shipping is 800 in Medusa. Scaling by 100 would price the shipping
+    // method at ¥80,000 and the customer would be charged it.
+    const jpy: ShippingInfo[] = [
+      { id: "STANDARD", name: "Flat Rate", rate: "800", currency: "JPY" },
+    ]
+    expect(selectRate(jpy, "STANDARD", "JPY")).toEqual({
+      ok: true,
+      amount: 800,
+    })
+  })
+
   it("rejects a malformed rate rather than returning NaN or zero", () => {
     const bad: ShippingInfo[] = [
       { id: "STANDARD", name: "x", rate: "not-a-number", currency: "USD" },
@@ -334,6 +346,26 @@ describe("buildRateItems", () => {
     expect(
       buildRateItems([{ variant_id: "x", quantity: 1 }], new Map())
     ).toEqual([])
+  })
+
+  it("sends a zero-decimal line value without dividing it", () => {
+    // The cart line is ¥1500. Sending "15.00" under-reports the parcel by a
+    // hundredfold, which skews the shipping quote and the customs declaration.
+    const items = buildRateItems(
+      [{ variant_id: "var_1", quantity: 1, unit_price: 1500 }],
+      new Map([["var_1", "4012"]]),
+      "JPY"
+    )
+    expect(items).toEqual([{ variant_id: 4012, quantity: 1, value: "1500" }])
+  })
+
+  it("still divides a two-decimal line value", () => {
+    const items = buildRateItems(
+      [{ variant_id: "var_1", quantity: 1, unit_price: 1500 }],
+      new Map([["var_1", "4012"]]),
+      "USD"
+    )
+    expect(items[0].value).toBe("15.00")
   })
 
   it("omits value when the unit price is unknown", () => {

@@ -1,4 +1,5 @@
 import { createHash } from "crypto"
+import { minorUnitFactor } from "./currency"
 import { parsePriceToMinorUnits } from "./mappers"
 import type {
   FallbackReason,
@@ -114,7 +115,10 @@ export function selectRate(
     return { ok: false, reason: "method_unavailable" }
   }
 
-  return { ok: true, amount: parsePriceToMinorUnits(match.rate) }
+  // Scaled by the quote's own currency. The equality check above already
+  // proved it matches the cart's, so either code would do — the quote's is
+  // used because it is the currency the rate string is actually denominated in.
+  return { ok: true, amount: parsePriceToMinorUnits(match.rate, quoteCurrency) }
 }
 
 /** Countries where Printful requires a state code alongside the country. */
@@ -155,12 +159,22 @@ export type CartLineForRates = {
  * variant id stored in variant metadata during sync. Lines whose variant has no
  * catalog id are skipped: that covers non-Printful products in a mixed store,
  * and Printful variants synced before the mapper recorded that id.
+ *
+ * `unit_price` is minor units in the cart's currency and `value` is the decimal
+ * string Printful expects, so the conversion out is the currency's factor and
+ * the decimal count is the currency's too. A ¥1500 line sends "1500": dividing
+ * it by 100 would declare a ¥15 parcel to customs and quote its shipping.
  */
 export function buildRateItems(
   lines: CartLineForRates[],
-  catalogIdByVariantId: Map<string, string>
+  catalogIdByVariantId: Map<string, string>,
+  cartCurrency?: string
 ): ShippingRateItem[] {
   const items: ShippingRateItem[] = []
+  const factor = minorUnitFactor(cartCurrency)
+  // 100 → 2 decimals, 1 → 0. Printful reads the string as a decimal number, so
+  // "1500.00" for yen would be as wrong as it is malformed.
+  const decimals = factor === 1 ? 0 : 2
 
   for (const line of lines) {
     const catalogId = catalogIdByVariantId.get(line.variant_id)
@@ -188,7 +202,7 @@ export function buildRateItems(
       variant_id: parsed,
       quantity,
       ...(line.unit_price != null
-        ? { value: (line.unit_price / 100).toFixed(2) }
+        ? { value: (line.unit_price / factor).toFixed(decimals) }
         : {}),
     })
   }

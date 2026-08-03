@@ -54,6 +54,37 @@ describe("mappers", () => {
     expect(parsePriceToMinorUnits(null)).toBe(0)
   })
 
+  it("leaves a zero-decimal price at its major unit", () => {
+    expect(parsePriceToMinorUnits("1500", "JPY")).toBe(1500)
+    expect(parsePriceToMinorUnits("1500", "jpy")).toBe(1500)
+  })
+
+  it("still scales a two-decimal price", () => {
+    expect(parsePriceToMinorUnits("25.00", "USD")).toBe(2500)
+    expect(parsePriceToMinorUnits("1500", "USD")).toBe(150000)
+  })
+
+  it("maps a JPY sync product without inflating its price", () => {
+    const jpy = {
+      sync_product: sample.sync_product,
+      sync_variants: [
+        { ...sample.sync_variants[0], currency: "JPY", retail_price: "1500" },
+      ],
+    } as typeof sample
+
+    const mapped = mapSyncProductToMedusa(jpy, { markupPercent: 0 })
+    expect(mapped.variants[0].prices[0]).toEqual({
+      amount: 1500,
+      currency_code: "jpy",
+    })
+  })
+
+  it("applies markup to a zero-decimal amount without rescaling it", () => {
+    // applyMarkup multiplies by a ratio, so it is unit-agnostic: 1500 JPY
+    // minor units plus 30% is 1950 JPY minor units, same arithmetic as cents.
+    expect(applyMarkup(1500, 30)).toBe(1950)
+  })
+
   it("applies markup", () => {
     expect(applyMarkup(1000, 30)).toBe(1300)
     expect(applyMarkup(1000)).toBe(1000)
