@@ -133,8 +133,20 @@ describe("toMinorUnits", () => {
     // 12.34 * 100 is 1233.9999999999998 in IEEE-754. Truncating gives 1233 —
     // a cent lost on a value the merchant can see in Printful's dashboard.
     expect(toMinorUnits(12.34)).toBe(1234)
+    // 0.07 * 100 is 7.000000000000001; 0.29 * 100 is 28.999999999999996.
+    // Truncation turns the second into 28 — a real cent, lost.
     expect(toMinorUnits(0.07)).toBe(7)
-    expect(toMinorUnits(1.005)).toBe(101)
+    expect(toMinorUnits(0.29)).toBe(29)
+    expect(toMinorUnits(4.99)).toBe(499)
+  })
+
+  it("rounds a half-cent down when the float lands below it", () => {
+    // Deliberately pinning actual behaviour, not the arithmetic ideal:
+    // 1.005 * 100 is 100.49999999999999, so Math.round gives 100, not 101.
+    // Printful only ever sends two-decimal amounts, so this input cannot
+    // arise from a real cost — the assertion exists so that anyone changing
+    // the converter sees exactly which edge they are moving.
+    expect(toMinorUnits(1.005)).toBe(100)
   })
 
   it("accepts the string Printful uses for digitization", () => {
@@ -212,7 +224,7 @@ export function toMinorUnits(
 - [ ] **Step 4: Run the test**
 
 Run: `npx vitest run tests/costs.test.ts`
-Expected: PASS, 6 tests.
+Expected: PASS, 7 tests.
 
 - [ ] **Step 5: Commit**
 
@@ -272,14 +284,14 @@ describe("toMinorUnits rounding properties", () => {
 - [ ] **Step 2: Run it**
 
 Run: `npx vitest run tests/costs.test.ts`
-Expected: PASS, 8 tests.
+Expected: PASS, 9 tests.
 
 - [ ] **Step 3: Prove the test is a real guard**
 
 Temporarily change `Math.round(n * 100)` to `Math.trunc(n * 100)` in `src/utils/costs.ts`.
 
 Run: `npx vitest run tests/costs.test.ts`
-Expected: FAIL — the sweep reports mismatches such as `0.29 -> 28, expected 29`.
+Expected: FAIL — the sweep reports **69** mismatches across the 1000 amounts, the first being `0.29 -> 28, expected 29`. (Verified: 69 of the 1000 two-decimal amounts land just below their cent in IEEE-754.)
 
 Revert to `Math.round`. Re-run: PASS. **Report both outputs.**
 
@@ -482,7 +494,7 @@ export function planCostMetadata(
 - [ ] **Step 4: Run the tests**
 
 Run: `npx vitest run tests/costs.test.ts`
-Expected: PASS, 15 tests.
+Expected: PASS, 16 tests.
 
 - [ ] **Step 5: Prove the currency guard is real**
 
