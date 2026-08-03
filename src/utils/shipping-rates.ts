@@ -232,7 +232,15 @@ export type RateContext = {
     address_2?: string
   }
   items?: Array<{
-    variant?: { id?: string }
+    variant?: {
+      id?: string
+      /**
+       * Present in both cart contexts — `cartFieldsForRefreshSteps` selects
+       * `items.variant.product.shipping_profile.id`. It is what lets the
+       * confirmation path narrow to the same lines the pricing path was given.
+       */
+      product?: { shipping_profile?: { id?: string } }
+    }
     quantity?: number
     unit_price?: number
   }>
@@ -259,10 +267,35 @@ export type RateRequestPlan =
  * Split out from `buildRateRequest` because the caller must resolve catalog ids
  * for these variants — a container-bound `query` lookup — before the request can
  * be built. Keeping the lookup outside lets the builder stay pure.
+ *
+ * `shippingProfileId` narrows to the lines that ship under one profile. Medusa
+ * hands the two paths different item lists for the same cart: the pricing
+ * workflow filters by the option's profile
+ * (`list-shipping-options-for-cart-with-pricing.js:266`), while the
+ * add-method workflow passes the cart whole (`add-shipping-method-to-cart.js:90`).
+ * Inheriting that difference would give the two paths different cache keys, so
+ * a confirmation would miss the entry pricing wrote seconds earlier — silently,
+ * and only on mixed-profile carts.
+ *
+ * Unlike Medusa's own `filterCartItemsByShippingProfile`, this **fails open**:
+ * a line whose profile is absent is kept rather than dropped. Medusa filters a
+ * list it populated itself and can fail closed safely; this runs on a context
+ * that may legitimately omit the field, where dropping would report a cart as
+ * having no Printful items at all.
  */
-export function rateLinesFrom(context: RateContext): CartLineForRates[] {
+export function rateLinesFrom(
+  context: RateContext,
+  shippingProfileId?: string
+): CartLineForRates[] {
   return (context.items ?? [])
     .filter((i) => i.variant?.id)
+    .filter((i) => {
+      if (!shippingProfileId) {
+        return true
+      }
+      const profile = i.variant?.product?.shipping_profile?.id
+      return profile === undefined || profile === shippingProfileId
+    })
     .map((i) => ({
       variant_id: i.variant!.id as string,
       quantity: Number(i.quantity ?? 1),

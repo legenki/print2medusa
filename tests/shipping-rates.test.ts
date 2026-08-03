@@ -7,6 +7,7 @@ import {
   selectRate,
   buildRateItems,
   isAddressQuotable,
+  rateLinesFrom,
   PRINTFUL_SHIPPING_METHODS,
 } from "../src/utils/shipping-rates"
 import { resolveStateCode } from "../src/utils/mappers"
@@ -708,4 +709,58 @@ describe("country matrix", () => {
       ).toBe(c.quotable)
     })
   }
+})
+
+describe("cache key agreement between pricing and confirmation", () => {
+  // The two Medusa paths hand the provider different item lists for the same
+  // cart. `list-shipping-options-for-cart-with-pricing.js:266` filters by the
+  // option's shipping profile; `add-shipping-method-to-cart.js:90` passes
+  // `...cart` unfiltered. If the provider inherits that difference, the
+  // confirmation misses the entry pricing wrote moments earlier — silently,
+  // and only on mixed-profile carts, which is exactly how it would reach
+  // production unnoticed.
+  const printfulItem = {
+    variant: {
+      id: "var_pf",
+      product: { shipping_profile: { id: "sp_printful" } },
+    },
+    quantity: 1,
+    unit_price: 2500,
+  }
+  const otherItem = {
+    variant: {
+      id: "var_other",
+      product: { shipping_profile: { id: "sp_bulky" } },
+    },
+    quantity: 1,
+    unit_price: 9900,
+  }
+
+  it("reads the same lines whether or not the caller pre-filtered", () => {
+    // Pricing already narrowed to the Printful profile; confirmation did not.
+    const pricingSide = rateLinesFrom({ items: [printfulItem] }, "sp_printful")
+    const confirmSide = rateLinesFrom(
+      { items: [printfulItem, otherItem] },
+      "sp_printful"
+    )
+
+    expect(confirmSide).toEqual(pricingSide)
+    expect(confirmSide.map((l) => l.variant_id)).toEqual(["var_pf"])
+  })
+
+  it("keeps every line when no profile is given", () => {
+    // Single-profile stores, and any caller that has no profile to narrow by,
+    // must not silently lose their cart.
+    const lines = rateLinesFrom({ items: [printfulItem, otherItem] })
+    expect(lines.map((l) => l.variant_id)).toEqual(["var_pf", "var_other"])
+  })
+
+  it("does not drop a line whose profile Medusa did not populate", () => {
+    // Failing closed here would price a cart as having no Printful items.
+    // Medusa's own filter fails closed; this one cannot, because it runs on a
+    // context that may legitimately omit the field.
+    const unprofiled = { variant: { id: "var_bare" }, quantity: 1 }
+    const lines = rateLinesFrom({ items: [unprofiled] }, "sp_printful")
+    expect(lines.map((l) => l.variant_id)).toEqual(["var_bare"])
+  })
 })
