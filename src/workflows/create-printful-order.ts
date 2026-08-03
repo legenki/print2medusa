@@ -4,7 +4,7 @@ import {
   StepResponse,
   WorkflowResponse,
 } from "@medusajs/framework/workflows-sdk"
-import { Modules } from "@medusajs/framework/utils"
+import { ContainerRegistrationKeys, Modules } from "@medusajs/framework/utils"
 import { PRINTFUL_MODULE } from "../modules/printful"
 import type PrintfulModuleService from "../modules/printful/service"
 import type {
@@ -13,6 +13,7 @@ import type {
   PrintfulRecipient,
 } from "../utils/types"
 import { resolveStateCode } from "../utils/mappers"
+import { planCostMetadata } from "../utils/costs"
 
 export type CreatePrintfulOrderInput = {
   order_id: string
@@ -35,6 +36,7 @@ const createPrintfulOrderStep = createStep(
   async (input: CreatePrintfulOrderInput, { container }) => {
     const printful: PrintfulModuleService = container.resolve(PRINTFUL_MODULE)
     const orderModule = container.resolve(Modules.ORDER)
+    const logger = container.resolve(ContainerRegistrationKeys.LOGGER)
     const options = await printful.getOptions()
     const client = await printful.getClient()
 
@@ -154,6 +156,30 @@ const createPrintfulOrderStep = createStep(
       printful_order_id: String(pfOrder.id),
       status: pfOrder.status || "created",
     })
+
+    // Printful returns the real costs with the created order, so no separate
+    // estimate call is needed. Written best-effort: the order exists in
+    // Printful either way, and losing the margin figure must never fail the
+    // workflow and roll back a real order.
+    const costMetadata = planCostMetadata(pfOrder)
+    if (Object.keys(costMetadata).length > 0) {
+      try {
+        // `orderRow` rather than `existing` — that name is taken by the
+        // order-link lookup earlier in this step.
+        const orderRow = await orderModule.retrieveOrder(input.order_id, {
+          select: ["id", "metadata"],
+        })
+        await orderModule.updateOrders(input.order_id, {
+          metadata: { ...(orderRow.metadata ?? {}), ...costMetadata },
+        })
+      } catch (err) {
+        logger.error(
+          `Printful order ${pfOrder.id}: could not store costs: ${
+            err instanceof Error ? err.message : String(err)
+          }`
+        )
+      }
+    }
 
     return new StepResponse<CreateResult>({
       skipped: false,
