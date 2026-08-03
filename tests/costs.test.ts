@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest"
-import { toMinorUnits } from "../src/utils/costs"
+import {
+  COST_CURRENCY_KEY,
+  COST_TOTAL_KEY,
+  MARGIN_KEY,
+  RETAIL_CURRENCY_KEY,
+  RETAIL_TOTAL_KEY,
+  planCostMetadata,
+  toMinorUnits,
+} from "../src/utils/costs"
+import type { PrintfulOrder } from "../src/utils/types"
 
 describe("toMinorUnits", () => {
   it("converts a plain amount", () => {
@@ -79,5 +88,70 @@ describe("toMinorUnits rounding properties", () => {
       }
     }
     expect(failures).toEqual([])
+  })
+})
+
+const order = (
+  costs: Record<string, unknown>,
+  retail?: Record<string, unknown>
+): PrintfulOrder =>
+  ({
+    id: 1,
+    status: "fulfilled",
+    costs,
+    ...(retail ? { retail_costs: retail } : {}),
+  }) as PrintfulOrder
+
+describe("planCostMetadata", () => {
+  it("stores the cost breakdown in minor units", () => {
+    const meta = planCostMetadata(
+      order({ currency: "USD", subtotal: 10, shipping: 5, total: 15 })
+    )
+    expect(meta[COST_TOTAL_KEY]).toBe(1500)
+    expect(meta[COST_CURRENCY_KEY]).toBe("usd")
+  })
+
+  it("computes margin as retail minus cost when currencies agree", () => {
+    const meta = planCostMetadata(
+      order({ currency: "USD", total: 15 }, { currency: "USD", total: 25 })
+    )
+    expect(meta[RETAIL_TOTAL_KEY]).toBe(2500)
+    expect(meta[MARGIN_KEY]).toBe(1000)
+  })
+
+  it("refuses to compute margin across different currencies", () => {
+    // Subtracting USD from EUR produces a number that looks authoritative and
+    // is meaningless. Both totals are still stored, each with its currency.
+    const meta = planCostMetadata(
+      order({ currency: "USD", total: 15 }, { currency: "EUR", total: 25 })
+    )
+    expect(meta[COST_TOTAL_KEY]).toBe(1500)
+    expect(meta[RETAIL_TOTAL_KEY]).toBe(2500)
+    expect(meta[MARGIN_KEY]).toBeUndefined()
+  })
+
+  it("omits margin when retail costs are absent", () => {
+    const meta = planCostMetadata(order({ currency: "USD", total: 15 }))
+    expect(meta[MARGIN_KEY]).toBeUndefined()
+  })
+
+  it("returns nothing at all when the order carries no costs", () => {
+    const meta = planCostMetadata({ id: 1, status: "draft" } as PrintfulOrder)
+    expect(meta).toEqual({})
+  })
+
+  it("omits a field it could not parse rather than storing zero", () => {
+    const meta = planCostMetadata(
+      order({ currency: "USD", total: "not-a-number" })
+    )
+    expect(meta[COST_TOTAL_KEY]).toBeUndefined()
+    expect(meta[COST_CURRENCY_KEY]).toBe("usd")
+  })
+
+  it("reads digitization even though Printful types it as a string", () => {
+    const meta = planCostMetadata(
+      order({ currency: "USD", digitization: "2.50", total: 15 })
+    )
+    expect(meta["printful_cost_digitization"]).toBe(250)
   })
 })
