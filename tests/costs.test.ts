@@ -155,3 +155,25 @@ describe("planCostMetadata", () => {
     expect(meta["printful_cost_digitization"]).toBe(250)
   })
 })
+
+describe("EUR order against USD Printful pricing", () => {
+  it("keeps both totals and withholds the margin", () => {
+    // The realistic mismatch: a European store selling in EUR while Printful
+    // bills the merchant in USD. Both numbers are real and worth storing; the
+    // difference between them is not a number anyone should act on.
+    const meta = planCostMetadata(
+      order(
+        { currency: "USD", subtotal: 10, shipping: 4.99, total: 14.99 },
+        { currency: "EUR", subtotal: 20, shipping: 5, total: 25 }
+      )
+    )
+
+    expect(meta[COST_TOTAL_KEY]).toBe(1499)
+    expect(meta[COST_CURRENCY_KEY]).toBe("usd")
+    expect(meta[RETAIL_TOTAL_KEY]).toBe(2500)
+    expect(meta[RETAIL_CURRENCY_KEY]).toBe("eur")
+    expect(meta[MARGIN_KEY]).toBeUndefined()
+    // 4.99 is the value that truncation would have turned into 498.
+    expect(meta["printful_cost_shipping"]).toBe(499)
+  })
+})
