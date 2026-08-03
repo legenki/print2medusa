@@ -3,13 +3,14 @@ import { join } from "path"
 import { describe, expect, it } from "vitest"
 import {
   buildRateCacheKey,
+  confirmMethod,
   selectRate,
   buildRateItems,
   isAddressQuotable,
   PRINTFUL_SHIPPING_METHODS,
 } from "../src/utils/shipping-rates"
 import { resolveStateCode } from "../src/utils/mappers"
-import type { ShippingInfo } from "../src/utils/types"
+import type { CachedQuote, ShippingInfo } from "../src/utils/types"
 
 const address = {
   country_code: "US",
@@ -438,6 +439,118 @@ describe("buildRateItems", () => {
         catalog
       )[0].value
     ).toBe("0.00")
+  })
+})
+
+describe("confirmMethod", () => {
+  const FRESHNESS_MS = 600_000
+
+  function entry(overrides: Partial<CachedQuote> = {}): CachedQuote {
+    return {
+      rates: [
+        { id: "STANDARD", name: "Flat Rate", rate: "4.99", currency: "USD" },
+      ],
+      currency: "USD",
+      cached_at: Date.now(),
+      ...overrides,
+    }
+  }
+
+  it("confirms live from a fresh entry offering the method", () => {
+    // The common case: calculatePrice wrote this exact key moments earlier, so
+    // the confirmation costs no API call at all.
+    const result = confirmMethod({
+      cached: entry(),
+      freshnessMs: FRESHNESS_MS,
+      methodId: "STANDARD",
+      currency: "USD",
+    })
+
+    expect(result).toEqual({ confirmation: "live", methodId: "STANDARD" })
+  })
+
+  it("never confirms from a stale entry", () => {
+    // Deliberately unlike calculatePrice's staleOrFlat: a stale *price* is
+    // defensible, a stale *method confirmation* is not. The method may no
+    // longer be offered, so only a re-fetch can stamp live.
+    const result = confirmMethod({
+      cached: entry({ cached_at: Date.now() - 60 * 60 * 1000 }),
+      freshnessMs: FRESHNESS_MS,
+      methodId: "STANDARD",
+      currency: "USD",
+    })
+
+    expect(result.confirmation).not.toBe("live")
+    expect(result).toEqual({ confirmation: "printful_unreachable" })
+  })
+
+  it("does not confirm a fresh entry that does not offer the method", () => {
+    const result = confirmMethod({
+      cached: entry(),
+      freshnessMs: FRESHNESS_MS,
+      methodId: "EXPRESS",
+      currency: "USD",
+    })
+
+    expect(result).toEqual({ confirmation: "method_unavailable" })
+  })
+
+  it("does not confirm across a currency mismatch", () => {
+    const result = confirmMethod({
+      cached: entry(),
+      freshnessMs: FRESHNESS_MS,
+      methodId: "STANDARD",
+      currency: "EUR",
+    })
+
+    expect(result).toEqual({ confirmation: "currency_mismatch" })
+  })
+
+  it("treats an absent entry as unconfirmed", () => {
+    const result = confirmMethod({
+      cached: null,
+      freshnessMs: FRESHNESS_MS,
+      methodId: "STANDARD",
+      currency: "USD",
+    })
+
+    expect(result.confirmation).not.toBe("live")
+  })
+
+  it("does not treat a future-dated entry as fresh", () => {
+    // Clock skew on the cache node would otherwise make the entry read as
+    // fresh forever — the same guard calculatePrice applies via `age >= 0`.
+    const result = confirmMethod({
+      cached: entry({ cached_at: Date.now() + 10 * 365 * 24 * 60 * 60 * 1000 }),
+      freshnessMs: FRESHNESS_MS,
+      methodId: "STANDARD",
+      currency: "USD",
+    })
+
+    expect(result.confirmation).not.toBe("live")
+  })
+
+  it("never yields misconfigured_zero", () => {
+    // misconfigured_zero describes a missing flat rate, and confirmation never
+    // consults fallbackShippingRates. No input may produce it.
+    const cases: Array<CachedQuote | null> = [
+      null,
+      entry(),
+      entry({ cached_at: Date.now() - 60 * 60 * 1000 }),
+      entry({ rates: [] }),
+    ]
+
+    for (const cached of cases) {
+      for (const currency of ["USD", "EUR", ""]) {
+        const result = confirmMethod({
+          cached,
+          freshnessMs: FRESHNESS_MS,
+          methodId: "STANDARD",
+          currency,
+        })
+        expect(result.confirmation).not.toBe("misconfigured_zero")
+      }
+    }
   })
 })
 

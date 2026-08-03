@@ -2,6 +2,7 @@ import { createHash } from "crypto"
 import { minorUnitFactor } from "./currency"
 import { parsePriceToMinorUnits } from "./mappers"
 import type {
+  CachedQuote,
   FallbackReason,
   ShippingInfo,
   ShippingRateItem,
@@ -119,6 +120,65 @@ export function selectRate(
   // proved it matches the cart's, so either code would do — the quote's is
   // used because it is the currency the rate string is actually denominated in.
   return { ok: true, amount: parsePriceToMinorUnits(match.rate, quoteCurrency) }
+}
+
+/** What `shipping_method.data.rate_source` may hold after confirmation. */
+export type MethodConfirmation = "live" | FallbackReason
+
+export type ConfirmMethodInput = {
+  /** The entry `calculatePrice` wrote under the shared cache key, if any. */
+  cached: CachedQuote | null
+  /** How long an entry counts as fresh, in milliseconds. */
+  freshnessMs: number
+  methodId: string
+  currency: string
+}
+
+export type ConfirmMethodResult =
+  | { confirmation: "live"; methodId: string }
+  | { confirmation: Exclude<MethodConfirmation, "live"> }
+
+/**
+ * Decide whether a cached quote confirms the method the customer selected.
+ *
+ * Pure: the caller re-fetches and calls again when this does not confirm, so
+ * the decision itself never reaches the network.
+ *
+ * A stale entry never confirms, which is deliberately unlike `calculatePrice`'s
+ * `staleOrFlat`. Serving a stale *price* is defensible — the customer sees a
+ * number that was true recently. Serving a stale *method confirmation* is not:
+ * the method may have stopped being offered, and stamping "live" on it would
+ * record an agreement Printful never made. Only a fresh entry, or a re-fetch
+ * the caller performs after this returns, can confirm.
+ *
+ * `misconfigured_zero` is reachable in `FallbackReason` but not here: it
+ * describes a missing flat rate, and confirmation never consults
+ * `fallbackShippingRates`.
+ */
+export function confirmMethod(input: ConfirmMethodInput): ConfirmMethodResult {
+  const { cached, freshnessMs, methodId, currency } = input
+
+  if (!cached) {
+    return { confirmation: "printful_unreachable" }
+  }
+
+  // A negative age means the entry is dated in the future — clock skew on the
+  // cache node — which would otherwise read as fresh until that date passes.
+  // Same guard `calculatePrice` applies before trusting a fresh hit.
+  const age = Date.now() - cached.cached_at
+  if (age < 0 || age >= freshnessMs) {
+    return { confirmation: "printful_unreachable" }
+  }
+
+  // `selectRate` already answers "does this list offer this method in a usable
+  // currency", including the currency-mismatch and malformed-rate cases, so
+  // the check is not reimplemented here.
+  const hit = selectRate(cached.rates, methodId, currency)
+  if (!hit.ok) {
+    return { confirmation: hit.reason }
+  }
+
+  return { confirmation: "live", methodId }
 }
 
 /** Countries where Printful requires a state code alongside the country. */
