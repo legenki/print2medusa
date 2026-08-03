@@ -50,6 +50,19 @@ describe("OrphanTracker", () => {
     expect(tracker.toDelete()).toEqual(["prod_1"])
   })
 
+  it("has nothing left pending when a failed product cleans up after itself", () => {
+    // The success-path leak: create succeeded, the link write threw, and the
+    // per-product catch swallowed it so the step still succeeds. Compensation
+    // only runs on step failure, so anything still tracked here is a product
+    // stranded in Medusa with no link row — invisible to the next sync, and
+    // duplicated by it.
+    const tracker = new OrphanTracker()
+    tracker.track("prod_failed")
+    // What the catch block must do:
+    tracker.release("prod_failed")
+    expect(tracker.toDelete()).toEqual([])
+  })
+
   it("does not let the caller mutate the pending list", () => {
     const tracker = new OrphanTracker()
     tracker.track("prod_1")

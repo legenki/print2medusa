@@ -51,6 +51,7 @@ const syncProductsStep = createStep(
   async (input: SyncProductsInput, { container }) => {
     const printful: PrintfulModuleService = container.resolve(PRINTFUL_MODULE)
     const productModule = container.resolve(Modules.PRODUCT)
+    const logger = container.resolve(ContainerRegistrationKeys.LOGGER)
     const client = await printful.getClient()
     const options = await printful.getOptions()
     const storeId = await printful.getStoreId()
@@ -83,6 +84,11 @@ const syncProductsStep = createStep(
       if (summary.is_ignored) {
         continue
       }
+
+      // Scoped to this iteration so the catch below knows which product, if
+      // any, this pass created. Set the moment the product exists in Medusa
+      // and cleared once its link row is written.
+      let pendingProductId: string | undefined
 
       try {
         const detail = await client.getSyncProduct(summary.id)
@@ -255,6 +261,7 @@ const syncProductsStep = createStep(
 
           const created = result[0]
           orphans.track(created.id)
+          pendingProductId = created.id
 
           await printful.createPrintfulProductLinks({
             printful_store_id: storeId,
@@ -265,6 +272,7 @@ const syncProductsStep = createStep(
 
           // Linked — no longer an orphan, and never to be deleted.
           orphans.release(created.id)
+          pendingProductId = undefined
 
           for (const variant of created.variants ?? []) {
             const syncVariantId = variant.metadata?.printful_sync_variant_id
@@ -286,7 +294,32 @@ const syncProductsStep = createStep(
         counters.failed += 1
         const message = err instanceof Error ? err.message : String(err)
         counters.errors.push(`Product ${summary.id}: ${message}`)
+
+        // The product was created but its link write never landed. The loop
+        // continues and the step still SUCCEEDS, so compensation — which runs
+        // only on step failure — will never see this. Left alone it is a
+        // product stranded in Medusa with no link row: invisible to the next
+        // sync's findProductLink, which duplicates it.
+        if (pendingProductId) {
+          const orphanId = pendingProductId
+          try {
+            await productModule.deleteProducts([orphanId])
+            // Released only after a delete that actually happened, so a
+            // failure here still leaves it for the compensation to retry.
+            orphans.release(orphanId)
+          } catch (deleteErr) {
+            // Must not mask the original error — that is what gets reported.
+            logger.error(
+              `Printful sync: could not delete orphaned product ${orphanId} after a failed link write: ${
+                deleteErr instanceof Error
+                  ? deleteErr.message
+                  : String(deleteErr)
+              }`
+            )
+          }
+        }
       } finally {
+        pendingProductId = undefined
         // In `finally` so it runs however the product exited — success, an
         // early `continue`, or a throw. The heartbeat is what keeps the claim
         // from being reaped, so a catalog of failures must not starve it.
