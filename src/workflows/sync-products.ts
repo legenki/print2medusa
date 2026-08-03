@@ -14,6 +14,7 @@ import { PRINTFUL_MODULE } from "../modules/printful"
 import type PrintfulModuleService from "../modules/printful/service"
 import { diffVariantsForUpsert, mapSyncProductToMedusa } from "../utils/mappers"
 import { OrphanTracker } from "../utils/orphans"
+import { reconcileVariantLinks } from "../utils/variant-links"
 import {
   planStockActions,
   resolveExistingProductWrite,
@@ -159,9 +160,7 @@ const syncProductsStep = createStep(
           }
 
           if (toCreate.length) {
-            const { result: created } = await batchProductVariantsWorkflow(
-              container
-            ).run({
+            await batchProductVariantsWorkflow(container).run({
               input: {
                 create: toCreate.map((c) => ({
                   product_id: productId,
@@ -175,32 +174,30 @@ const syncProductsStep = createStep(
                 })),
               },
             })
-
-            for (const variant of created.created ?? []) {
-              const syncVariantId = variant.metadata?.printful_sync_variant_id
-              if (!syncVariantId) {
-                continue
-              }
-              await printful.createPrintfulVariantLinks({
-                printful_store_id: storeId,
-                printful_sync_product_id: String(summary.id),
-                printful_sync_variant_id: String(syncVariantId),
-                medusa_variant_id: variant.id,
-                last_synced_at: new Date(),
-              })
-            }
+            // No link loop here: the reconcile below re-reads the product, so
+            // these new variants are in its scope and get linked there.
           }
 
-          // Refresh timestamps on existing variant links.
-          for (const v of detail.sync_variants) {
-            const existingVariant = await printful.findVariantLink(String(v.id))
-            if (existingVariant) {
-              await printful.updatePrintfulVariantLinks({
-                id: existingVariant.id,
-                last_synced_at: new Date(),
-              })
-            }
-          }
+          // Refresh existing variant links AND create any that are missing.
+          // Re-read the variants so freshly-created ones are in scope; the
+          // copy fetched for the diff predates the batch create above.
+          //
+          // The refresh-only loop this replaces could never repair a link row
+          // that failed to write, because `diffVariantsForUpsert` matches on
+          // variant metadata rather than link rows — so the variant looked
+          // already-synced and its row was never written again.
+          const linked = await productModule.retrieveProduct(productId, {
+            relations: ["variants"],
+          })
+          await reconcileVariantLinks(printful, {
+            storeId,
+            syncProductId: String(summary.id),
+            syncVariantIds: detail.sync_variants.map((v) => v.id),
+            medusaVariants: (linked.variants ?? []).map((pv) => ({
+              id: pv.id,
+              metadata: pv.metadata,
+            })),
+          })
 
           await printful.updatePrintfulProductLinks({
             id: existingLink.id,
@@ -274,19 +271,20 @@ const syncProductsStep = createStep(
           orphans.release(created.id)
           pendingProductId = undefined
 
-          for (const variant of created.variants ?? []) {
-            const syncVariantId = variant.metadata?.printful_sync_variant_id
-            if (!syncVariantId) {
-              continue
-            }
-            await printful.createPrintfulVariantLinks({
-              printful_store_id: storeId,
-              printful_sync_product_id: String(summary.id),
-              printful_sync_variant_id: String(syncVariantId),
-              medusa_variant_id: variant.id,
-              last_synced_at: new Date(),
-            })
-          }
+          // Resumable rather than best-effort: a throw here used to abandon
+          // every remaining variant, and because the product link row above
+          // already exists, the next sync took the update path and never went
+          // back for them. Now one unwritable row costs only that row, and the
+          // next sync's reconcile picks it up.
+          await reconcileVariantLinks(printful, {
+            storeId,
+            syncProductId: String(summary.id),
+            syncVariantIds: detail.sync_variants.map((v) => v.id),
+            medusaVariants: (created.variants ?? []).map((variant) => ({
+              id: variant.id,
+              metadata: variant.metadata,
+            })),
+          })
 
           counters.created += 1
         }

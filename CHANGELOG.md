@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.5.2
+
+Closes the known limit 0.5.1 left open.
+
+### Fixed
+
+- **A variant whose link row failed to write is repaired on the next sync.**
+  The update path only refreshed link rows it already found, and
+  `diffVariantsForUpsert` matches on variant metadata rather than link rows —
+  so a variant that lost its row looked already-synced and was never written
+  again. It stayed permanently unlinked, and order creation resolves
+  `sync_variant_id` through those rows, so a customer ordering it could fail to
+  map. The sync now creates any missing link whose Medusa variant carries the
+  matching `printful_sync_variant_id`.
+- **Variant linking is resumable instead of best-effort.** A failure part-way
+  through used to abandon every remaining variant for that product, and because
+  the product's own link row already existed, the next sync took the update
+  path and never went back for them. One unwritable row now costs only that
+  row.
+
 ## 0.5.1
 
 Two correctness fixes found by an external review of the released code, both
@@ -32,12 +52,6 @@ in the catalog sync.
 - The README install snippet omitted `liveShippingRates`,
   `fallbackShippingRates` and `dependencies: ["query"]`. Without the last one
   every quote silently falls back to the flat rate.
-
-### Known limits
-
-- **A variant whose link row failed to write is not repaired.** The sync's
-  update path refreshes existing variant links but never creates a missing
-  one, so such a variant stays unlinked. Tracked separately.
 
 ## 0.5.0
 
