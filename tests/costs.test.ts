@@ -49,3 +49,35 @@ describe("toMinorUnits", () => {
     expect(toMinorUnits(-4.99)).toBe(-499)
   })
 })
+
+describe("toMinorUnits rounding properties", () => {
+  it("never drifts from the exact cent across 1000 amounts", () => {
+    // A deterministic sweep of two-decimal amounts. Every one of these is a
+    // price a real order could carry, and each has an unambiguous correct
+    // answer in cents, so any float drift shows up as an exact mismatch.
+    const failures: string[] = []
+    for (let cents = 0; cents < 1000; cents++) {
+      const major = cents / 100
+      const got = toMinorUnits(major)
+      if (got !== cents) {
+        failures.push(`${major} -> ${got}, expected ${cents}`)
+      }
+    }
+    expect(failures).toEqual([])
+  })
+
+  it("agrees between the number and string forms of the same amount", () => {
+    // digitization arrives as a string and its siblings as numbers. If the two
+    // paths disagreed, one field of a cost breakdown would be off by a cent.
+    const failures: string[] = []
+    for (let cents = 0; cents < 1000; cents++) {
+      const major = cents / 100
+      const asNumber = toMinorUnits(major)
+      const asString = toMinorUnits(major.toFixed(2))
+      if (asNumber !== asString) {
+        failures.push(`${major}: number=${asNumber} string=${asString}`)
+      }
+    }
+    expect(failures).toEqual([])
+  })
+})
