@@ -9,8 +9,8 @@ plugin in a working state. The testing strategy tightens as the API surface grow
 
 |                       |                                          |
 | --------------------- | ---------------------------------------- |
-| Published version     | `0.6.0`                                  |
-| Tests                 | 306 (285 unit, 21 integration)           |
+| Published version     | `0.7.0`                                  |
+| Tests                 | 341 (320 unit, 21 integration)           |
 | Printful API coverage | 6 of 15 endpoint groups                  |
 | Test layers           | unit + integration against real Postgres |
 
@@ -22,9 +22,9 @@ Still unwired: **taxes** (Printful's `/tax/rates` has no documented contract),
 webhook reporting one that already happened), and **mockups**. Returns are
 therefore held to `1.0.0` with API v2; the rest are releases below.
 
-One product gap worth knowing before you deploy: the shipping method the
-customer selected is **not** passed to Printful, which picks its own. See the
-0.3.0 known limits in `CHANGELOG.md`.
+Since `0.7.0` the shipping method the customer selected is confirmed with
+Printful and sent on the order — when Printful confirms it. See the 0.7.0
+entry in `CHANGELOG.md` for what happens when it does not.
 
 ---
 
@@ -113,10 +113,13 @@ overcharged. Printful now computes the rate for the address and cart contents.
 
 ### What it did not solve
 
-The method the customer selected is priced correctly but **is not passed to
-Printful**, which picks its own. Medusa carries no provider data from price
+The method the customer selected was priced correctly but **was not passed to
+Printful**, which picked its own. Medusa carries no provider data from price
 calculation onto the shipping method — the intended mechanism was implemented,
 found to be dead code, and removed rather than left looking functional.
+
+Closed in `0.7.0` through a different seam: `validateFulfillmentData`, which
+receives the whole cart and whose return value Medusa does persist.
 
 ---
 
@@ -192,6 +195,31 @@ moved out for reasons found in Printful's API, recorded below.
 - **Rounding:** no float drift across 1000 generated amounts, mutation-proved
   (`Math.trunc` produces 69 mismatches)
 - Multi-currency: an EUR order against USD Printful pricing
+
+---
+
+## 0.7.0 — Shipping method agreement `shipped`
+
+The customer paid for a method Printful never saw. Closes the gap `0.3.0` opened
+and could not close.
+
+### What shipped
+
+- The method is confirmed with Printful in `validateFulfillmentData` — the one
+  hook that receives the whole cart and whose return value Medusa persists
+- A `shipping` override on the Printful order, sent **only** when Printful
+  confirmed that method for that cart
+- `shipping_method.data` records the outcome either way, naming the reason when
+  confirmation failed
+- A 15-second deadline on every Printful request, since the confirmation call
+  runs inside the customer's own request
+
+### Testing
+
+- Both polarities of the gate: live + id + allowlist sends the override; each
+  condition missing individually sends none, mutation-proved
+- Soft-fail reasons produce data without `printful_shipping`
+- A fresh cache hit confirms without an API call; a stale entry never confirms
 
 ---
 

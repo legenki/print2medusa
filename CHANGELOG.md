@@ -1,5 +1,69 @@
 # Changelog
 
+## 0.7.0
+
+Printful now ships the method the customer paid for.
+
+### Fixed
+
+- **The selected shipping method reaches Printful.** Orders were created with no
+  `shipping` override, so Printful chose its own method regardless of what the
+  customer selected and paid for — the delivery speed sold and the cost incurred
+  could both differ from what was quoted.
+
+  0.3.0 attempted this and shipped dead code: it stamped fields onto the object
+  returned by `calculatePrice`, which Medusa discards — it reads only
+  `calculated_amount` and `is_calculated_price_tax_inclusive` from a calculated
+  price. That attempt needed a type cast to compile and was removed rather than
+  left looking functional.
+
+  The method is now confirmed in `validateFulfillmentData`, which receives the
+  whole cart and whose return value Medusa persists verbatim onto the shipping
+  method and then onto the order.
+
+- **Every Printful request has a deadline.** Node's `fetch` bounds headers and
+  body at 300 seconds each and imposes no overall deadline, so a Printful that
+  hung rather than failed could stall a request indefinitely — four times over,
+  once per retry. Tolerable on a background sync; not on the confirmation call,
+  which runs inside the customer's own request. Now 15 seconds per attempt.
+
+### The rule that governs it
+
+**A `shipping` override is sent only when Printful itself confirmed that method
+for this cart.** A fallback price was never confirmed by Printful, so insisting
+on that method risks an order Printful rejects — worse than letting Printful
+choose. Confirmation failure is always soft: checkout proceeds exactly as before,
+and the order is created with no override.
+
+`shipping_method.data` records the outcome: `printful_shipping` and
+`rate_source: "live"` on success, or `rate_source` naming the reason
+(`printful_unreachable`, `method_unavailable`, `currency_mismatch`,
+`no_printful_items`, `query_unavailable`) on failure. The order path is a pure
+read of that record — no Printful call when the order is created.
+
+A **stale cache entry never confirms**, and a failed re-fetch does not fall back
+to one. A stale price is defensible; a stale method confirmation is not, because
+the method may no longer be offered.
+
+### Known limits
+
+- **The price shown and the method confirmed can disagree.** The cart may have
+  priced from a flat or stale-cache fallback while confirmation moments later
+  succeeded live. The customer is then charged an amount that is not the live
+  quote, for a method that is. Both halves are individually honest, and it needs
+  a failure at pricing time followed by a success seconds later. Re-pricing on
+  selection is a separate decision.
+- **Selecting a method costs one Printful call on a cache miss.** Bounded — once
+  per selection, not per cart refresh — and the common case is a fresh-cache hit,
+  because pricing populated that exact key moments earlier.
+- **Confirmation needs `dependencies: ["query"]`**, the same requirement live
+  rates already have. Without it, confirmation soft-fails to no override.
+- **A cart mixing shipping profiles is not narrowed.** Medusa hands the pricing
+  path only the items under the option's profile but hands the confirmation path
+  the whole cart, and the option's profile id is not among the arguments the
+  provider receives. Both paths use the same unfiltered lines, so they agree with
+  each other; the quote for a mixed cart simply includes non-Printful items.
+
 ## 0.6.0
 
 Money is scaled by the currency instead of always by 100.
@@ -252,7 +316,7 @@ Shipping is priced from Printful's live rates instead of by hand.
 
 ### Known limits
 
-- The shipping method the customer selected is not passed to Printful, which picks its own. Medusa does not carry provider data from price calculation onto the shipping method; closing this needs a different mechanism and its own release.
+- The shipping method the customer selected is not passed to Printful, which picks its own. Medusa does not carry provider data from price calculation onto the shipping method; closing this needs a different mechanism and its own release. **Fixed in 0.7.0**, by confirming the method in `validateFulfillmentData` instead.
 - Return shipping options are never priced live — Printful quotes outbound shipping only.
 
 ## 0.2.0

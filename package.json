@@ -1,6 +1,6 @@
 {
   "name": "@legenki/print2medusa",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Printful → Medusa v2 plugin: product sync, auto fulfillment, and admin tools",
   "author": "Andy Legenki",
   "license": "MIT",
