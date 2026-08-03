@@ -169,13 +169,21 @@ const createPrintfulOrderStep = createStep(
     // order Printful is already fulfilling.
     const orderMetadata = planCreatedOrderMetadata(pfOrder)
     try {
-      // `orderRow` rather than `existing` — that name is taken by the
-      // order-link lookup earlier in this step.
-      const orderRow = await orderModule.retrieveOrder(input.order_id, {
-        select: ["id", "metadata"],
-      })
-      await orderModule.updateOrders(input.order_id, {
-        metadata: { ...(orderRow.metadata ?? {}), ...orderMetadata },
+      // Under the same advisory lock the webhook path takes. Both do a
+      // read-modify-write of `metadata`, and the link became resolvable a few
+      // lines above — so a webhook arriving in that window could re-read the
+      // order, write a newer `printful_status`, and have this write clobber it
+      // back to the status captured at creation. Serializing the two makes the
+      // last writer win on a value it actually read.
+      await printful.withOrderLock(String(pfOrder.id), async () => {
+        // `orderRow` rather than `existing` — that name is taken by the
+        // order-link lookup earlier in this step.
+        const orderRow = await orderModule.retrieveOrder(input.order_id, {
+          select: ["id", "metadata"],
+        })
+        await orderModule.updateOrders(input.order_id, {
+          metadata: { ...(orderRow.metadata ?? {}), ...orderMetadata },
+        })
       })
     } catch (err) {
       logger.error(
