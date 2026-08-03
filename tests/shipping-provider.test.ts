@@ -527,11 +527,18 @@ describe("canCalculate", () => {
 
 describe("validateFulfillmentData", () => {
   it("accepts a recognized method id", async () => {
+    // No query bridged, so confirmation cannot even build a rate request. The
+    // method is still accepted — confirmation failure is always soft — but it
+    // is recorded as unconfirmed rather than stamped live.
     const { service } = makeProvider({})
 
     await expect(
-      service.validateFulfillmentData({ id: "STANDARD" }, { foo: 1 }, {})
-    ).resolves.toEqual({ foo: 1, printful_option_id: "STANDARD" })
+      service.validateFulfillmentData({ id: "STANDARD" }, { foo: 1 }, CONTEXT)
+    ).resolves.toEqual({
+      foo: 1,
+      printful_option_id: "STANDARD",
+      rate_source: "query_unavailable",
+    })
   })
 
   it("rejects an unrecognized method id rather than inventing a default", async () => {
@@ -574,5 +581,288 @@ describe("validateFulfillmentData", () => {
     await expect(
       service.validateFulfillmentData({ id: "nonsense" }, {}, {})
     ).rejects.toThrow(/PRINTFUL_RETURN/)
+  })
+})
+
+describe("validateFulfillmentData confirmation", () => {
+  /**
+   * Seed the cache with a quote under the exact key the pricing path writes,
+   * by running `calculatePrice` first. Recomputing the key here by hand would
+   * test our arithmetic rather than the agreement between the two paths.
+   */
+  async function seedCache(
+    service: PrintfulFulfillmentProviderService,
+    rates: ShippingInfo[] = RATES
+  ) {
+    const calls = vi.fn().mockResolvedValue(rates)
+    const original = (service as never as { client_: unknown }).client_
+    ;(service as never as { client_: unknown }).client_ = {
+      getShippingRates: calls,
+    }
+    await service.calculatePrice(
+      { id: "STANDARD" } as never,
+      {} as never,
+      CONTEXT
+    )
+    ;(service as never as { client_: unknown }).client_ = original
+    return calls
+  }
+
+  it("confirms live from a fresh cache entry without calling Printful", async () => {
+    // The common case: `calculatePrice` populated this exact key moments ago,
+    // so selecting the method costs nothing.
+    const getShippingRates = vi.fn().mockResolvedValue(RATES)
+    const { service } = makeProvider({
+      getShippingRates,
+      query: makeQuery(),
+      cache: makeCache(),
+    })
+    await seedCache(service)
+
+    const result = await service.validateFulfillmentData(
+      { id: "STANDARD" },
+      { foo: 1 },
+      CONTEXT
+    )
+
+    expect(result).toEqual({
+      foo: 1,
+      printful_option_id: "STANDARD",
+      printful_shipping: "STANDARD",
+      rate_source: "live",
+    })
+    // The seeding call used its own stub, so this one must be untouched.
+    expect(getShippingRates).not.toHaveBeenCalled()
+  })
+
+  it("calls Printful once on a cache miss and confirms live", async () => {
+    const getShippingRates = vi.fn().mockResolvedValue(RATES)
+    const { service } = makeProvider({
+      getShippingRates,
+      query: makeQuery(),
+      cache: makeCache(),
+    })
+
+    const result = await service.validateFulfillmentData(
+      { id: "STANDARD" },
+      {},
+      CONTEXT
+    )
+
+    expect(result).toEqual({
+      printful_option_id: "STANDARD",
+      printful_shipping: "STANDARD",
+      rate_source: "live",
+    })
+    expect(getShippingRates).toHaveBeenCalledTimes(1)
+  })
+
+  it("does not confirm from a stale entry, and does not fall back to one", async () => {
+    // Deliberately unlike `calculatePrice`'s `staleOrFlat`. A stale price is
+    // defensible; a stale method confirmation is not — the method may no
+    // longer be offered, and stamping "live" would record an agreement
+    // Printful never made.
+    const cache = makeCache()
+    const { service } = makeProvider({
+      query: makeQuery(),
+      cache,
+    })
+    await seedCache(service)
+
+    // Age every entry past the freshness window (600s default).
+    for (const [key, value] of cache._store) {
+      cache._store.set(key, {
+        ...(value as object),
+        cached_at: Date.now() - 10 * 60 * 1000 - 1000,
+      })
+    }
+
+    // The re-fetch fails too, so the stale entry is the only thing available —
+    // and it must still not confirm.
+    ;(service as never as { client_: unknown }).client_ = {
+      getShippingRates: vi.fn().mockRejectedValue(new Error("ETIMEDOUT")),
+    }
+
+    const result = await service.validateFulfillmentData(
+      { id: "STANDARD" },
+      {},
+      CONTEXT
+    )
+
+    expect(result).toEqual({
+      printful_option_id: "STANDARD",
+      rate_source: "printful_unreachable",
+    })
+    expect(result).not.toHaveProperty("printful_shipping")
+  })
+
+  it("soft-fails when Printful is unreachable", async () => {
+    // Checkout must proceed exactly as it does today. A confirmation failure
+    // never blocks a sale.
+    const { service } = makeProvider({
+      getShippingRates: vi.fn().mockRejectedValue(new Error("ETIMEDOUT")),
+      query: makeQuery(),
+      cache: makeCache(),
+    })
+
+    const result = await service.validateFulfillmentData(
+      { id: "STANDARD" },
+      { foo: 1 },
+      CONTEXT
+    )
+
+    expect(result).toEqual({
+      foo: 1,
+      printful_option_id: "STANDARD",
+      rate_source: "printful_unreachable",
+    })
+  })
+
+  it("soft-fails when Printful does not offer the method", async () => {
+    const { service } = makeProvider({
+      getShippingRates: vi
+        .fn()
+        .mockResolvedValue([
+          { id: "OTHER", name: "Other", rate: "3.00", currency: "USD" },
+        ]),
+      query: makeQuery(),
+      cache: makeCache(),
+    })
+
+    const result = await service.validateFulfillmentData(
+      { id: "STANDARD" },
+      {},
+      CONTEXT
+    )
+
+    expect(result).toEqual({
+      printful_option_id: "STANDARD",
+      rate_source: "method_unavailable",
+    })
+  })
+
+  it("soft-fails when the quote is in an unusable currency", async () => {
+    const { service } = makeProvider({
+      getShippingRates: vi
+        .fn()
+        .mockResolvedValue([
+          { id: "STANDARD", name: "Flat", rate: "4.99", currency: "EUR" },
+        ]),
+      query: makeQuery(),
+      cache: makeCache(),
+    })
+
+    const result = await service.validateFulfillmentData(
+      { id: "STANDARD" },
+      {},
+      CONTEXT
+    )
+
+    expect(result).toEqual({
+      printful_option_id: "STANDARD",
+      rate_source: "currency_mismatch",
+    })
+  })
+
+  it("soft-fails when the cart has no Printful items", async () => {
+    const { service } = makeProvider({
+      getShippingRates: vi.fn().mockResolvedValue(RATES),
+      // Reports no catalog id for the variant, so no rate item can be built.
+      query: { graph: vi.fn().mockResolvedValue({ data: [] }) },
+      cache: makeCache(),
+    })
+
+    const result = await service.validateFulfillmentData(
+      { id: "STANDARD" },
+      {},
+      CONTEXT
+    )
+
+    expect(result).toEqual({
+      printful_option_id: "STANDARD",
+      rate_source: "no_printful_items",
+    })
+  })
+
+  it("never confirms the return option, and never calls Printful for it", async () => {
+    // Printful quotes outbound shipping only, so a return has nothing to
+    // confirm against. It carries no rate_source at all.
+    const getShippingRates = vi.fn().mockResolvedValue(RATES)
+    const { service } = makeProvider({
+      getShippingRates,
+      query: makeQuery(),
+      cache: makeCache(),
+    })
+
+    const result = await service.validateFulfillmentData(
+      { id: PRINTFUL_RETURN_OPTION_ID },
+      { foo: 1 },
+      CONTEXT
+    )
+
+    expect(result).toEqual({
+      foo: 1,
+      printful_option_id: PRINTFUL_RETURN_OPTION_ID,
+    })
+    expect(getShippingRates).not.toHaveBeenCalled()
+  })
+
+  it("still throws on an unrecognized id rather than soft-failing", async () => {
+    // The one hard failure: a misconfigured option is a merchant bug, not a
+    // Printful outage, and inventing a default would record one method while
+    // the customer was priced for another.
+    const { service } = makeProvider({
+      query: makeQuery(),
+      cache: makeCache(),
+    })
+
+    await expect(
+      service.validateFulfillmentData({ id: "printful-standard" }, {}, CONTEXT)
+    ).rejects.toThrow(/unrecognized method id/)
+  })
+
+  it("soft-fails rather than throwing when confirmation blows up unexpectedly", async () => {
+    // A bug in our own code must not block a sale either.
+    const { service } = makeProvider({
+      getShippingRates: vi.fn().mockResolvedValue(RATES),
+      query: {
+        graph: vi.fn().mockImplementation(() => {
+          throw new Error("boom")
+        }),
+      },
+      cache: makeCache(),
+    })
+
+    const result = await service.validateFulfillmentData(
+      { id: "STANDARD" },
+      {},
+      CONTEXT
+    )
+
+    expect(result).toHaveProperty("printful_option_id", "STANDARD")
+    expect(result).not.toHaveProperty("printful_shipping")
+  })
+
+  it("keeps printful_option_id whether or not confirmation succeeds", async () => {
+    // It predates confirmation and is independent of it.
+    const confirmed = makeProvider({
+      getShippingRates: vi.fn().mockResolvedValue(RATES),
+      query: makeQuery(),
+      cache: makeCache(),
+    })
+    const failed = makeProvider({
+      getShippingRates: vi.fn().mockRejectedValue(new Error("down")),
+      query: makeQuery(),
+      cache: makeCache(),
+    })
+
+    for (const { service } of [confirmed, failed]) {
+      const result = await service.validateFulfillmentData(
+        { id: "STANDARD" },
+        {},
+        CONTEXT
+      )
+      expect(result).toHaveProperty("printful_option_id", "STANDARD")
+    }
   })
 })

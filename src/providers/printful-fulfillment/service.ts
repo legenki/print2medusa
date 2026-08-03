@@ -17,6 +17,7 @@ import { PrintfulClient } from "../../utils/printful-client"
 import { resolveStateCode } from "../../utils/mappers"
 import {
   buildRateRequest,
+  confirmMethod,
   isAddressQuotable,
   LEGACY_OPTION_IDS,
   PRINTFUL_RETURN_OPTION_ID,
@@ -24,7 +25,11 @@ import {
   rateLinesFrom,
   selectRate,
 } from "../../utils/shipping-rates"
-import type { RateContext, RateRequestPlan } from "../../utils/shipping-rates"
+import type {
+  MethodConfirmation,
+  RateContext,
+  RateRequestPlan,
+} from "../../utils/shipping-rates"
 import type {
   CachedQuote,
   FallbackReason,
@@ -160,10 +165,24 @@ class PrintfulFulfillmentProviderService extends AbstractFulfillmentProviderServ
     )
   }
 
+  /**
+   * Validate the selected method and record whether Printful confirmed it.
+   *
+   * Medusa persists this return value verbatim as `shipping_method.data`
+   * (`add-shipping-method-to-cart.js:116`), and `complete-cart.js:405` copies
+   * it onto the order — which is what makes this the right place to record the
+   * confirmation. 0.3.0 stamped these fields onto `calculatePrice`'s return
+   * value instead, which Medusa discards, so the feature was dead code.
+   *
+   * Everything except the unrecognized-id throw fails soft. This runs once, at
+   * selection, so an API call is affordable here in a way it is not on the
+   * pricing path — but a confirmation failure must never block a sale, and an
+   * unconfirmed method simply lets Printful choose, exactly as it does today.
+   */
   async validateFulfillmentData(
     optionData: Record<string, unknown>,
     data: Record<string, unknown>,
-    _context: Record<string, unknown>
+    context: Record<string, unknown>
   ): Promise<Record<string, unknown>> {
     // Runs when the method is added to the cart, not on every price refresh, so
     // throwing here does not violate calculatePrice's never-throw constraint.
@@ -189,7 +208,113 @@ class PrintfulFulfillmentProviderService extends AbstractFulfillmentProviderServ
           `${[...PRINTFUL_SHIPPING_METHODS, PRINTFUL_RETURN_OPTION_ID].join(", ")}.`
       )
     }
-    return { ...data, printful_option_id: id }
+    const validated = { ...data, printful_option_id: id }
+
+    // Printful quotes outbound shipping only, so a return has nothing to
+    // confirm against — `canCalculate` already excludes it from live rates for
+    // the same reason. It carries no rate_source at all.
+    if (id === PRINTFUL_RETURN_OPTION_ID) {
+      return validated
+    }
+
+    let confirmation: MethodConfirmation
+    try {
+      confirmation = await this.confirmSelectedMethod(
+        id,
+        context as unknown as RateContext
+      )
+    } catch (err) {
+      // A bug in our own code must not block a sale any more than a Printful
+      // outage does.
+      this.logger_.error(
+        `Printful method confirmation failed unexpectedly: ${
+          err instanceof Error ? err.message : String(err)
+        }`
+      )
+      confirmation = "printful_unreachable"
+    }
+
+    if (confirmation !== "live") {
+      // No `printful_shipping`: the order path sends an override only for a
+      // method Printful confirmed, so omitting it lets Printful pick — the
+      // behaviour every order had before this release.
+      this.logger_.debug?.(
+        `Printful method ${id} not confirmed (${confirmation}); ` +
+          "the order will let Printful choose the shipping method."
+      )
+      return { ...validated, rate_source: confirmation }
+    }
+
+    return {
+      ...validated,
+      printful_shipping: id,
+      rate_source: "live",
+    }
+  }
+
+  /**
+   * Ask whether Printful offers this method for this cart.
+   *
+   * Goes through `planRateRequest`, the same seam `calculatePrice` uses, so the
+   * two compute the same cache key and this usually reads the entry pricing
+   * wrote seconds earlier rather than hitting the API.
+   *
+   * A stale entry never confirms, and a failed re-fetch does not fall back to
+   * one the way `staleOrFlat` does — `confirmMethod` encodes that rule and this
+   * does not work around it.
+   */
+  private async confirmSelectedMethod(
+    methodId: string,
+    ctx: RateContext
+  ): Promise<MethodConfirmation> {
+    const plan = await this.planRateRequest(ctx)
+    if (!plan.ok) {
+      // `incomplete_address` cannot reach a shipping-method selection in
+      // practice, but it is not a FallbackReason we want to invent a meaning
+      // for either; reporting it as unreachable would misdirect an operator to
+      // Printful's status page, so it is recorded as-is.
+      return plan.reason
+    }
+
+    const { recipient, items, currency, cacheKey } = plan
+
+    const cached = await this.readCache(cacheKey)
+    const fromCache = confirmMethod({
+      cached,
+      freshnessMs: this.freshnessMs_,
+      methodId,
+      currency,
+    })
+    if (fromCache.confirmation === "live") {
+      return "live"
+    }
+
+    let rates: ShippingInfo[]
+    try {
+      rates = await this.client_.getShippingRates({
+        recipient,
+        items,
+        ...(currency ? { currency } : {}),
+      })
+    } catch (err) {
+      this.logger_.warn(
+        `Printful method confirmation could not reach Printful: ${
+          err instanceof Error ? err.message : String(err)
+        }`
+      )
+      return "printful_unreachable"
+    }
+
+    // Written back under the shared key so a subsequent price refresh reuses
+    // this response instead of paying for another call.
+    await this.writeCache(
+      cacheKey,
+      { rates, currency, cached_at: Date.now() },
+      this.staleSeconds_
+    )
+
+    const selected = selectRate(rates, methodId, currency)
+    return selected.ok ? "live" : selected.reason
   }
 
   async canCalculate(data: CreateShippingOptionDTO): Promise<boolean> {
