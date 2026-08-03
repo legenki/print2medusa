@@ -15,6 +15,7 @@ import type PrintfulModuleService from "../modules/printful/service"
 import { diffVariantsForUpsert, mapSyncProductToMedusa } from "../utils/mappers"
 import { OrphanTracker } from "../utils/orphans"
 import { reconcileVariantLinks } from "../utils/variant-links"
+import { planSyncLogStatus } from "../utils/sync-status"
 import {
   planStockActions,
   resolveExistingProductWrite,
@@ -366,14 +367,9 @@ const finalizeSyncLogStep = createStep(
   "printful-finalize-sync-log",
   async (input: { logId: string; counters: SyncCounters }, { container }) => {
     const printful: PrintfulModuleService = container.resolve(PRINTFUL_MODULE)
-    const failedHard =
-      input.counters.failed > 0 &&
-      input.counters.created === 0 &&
-      input.counters.updated === 0
-
     const log = await printful.updatePrintfulSyncLogs({
       id: input.logId,
-      status: failedHard ? "failed" : "success",
+      status: planSyncLogStatus(input.counters),
       finished_at: new Date(),
       products_created: input.counters.created,
       products_updated: input.counters.updated,
