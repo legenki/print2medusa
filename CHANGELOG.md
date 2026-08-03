@@ -1,5 +1,44 @@
 # Changelog
 
+## 0.5.1
+
+Two correctness fixes found by an external review of the released code, both
+in the catalog sync.
+
+### Fixed
+
+- **A product you drafted by hand is no longer re-published by the next sync.**
+  `resolvePublication` was written and unit-tested in 0.4.0 but **never
+  called** — the sync force-set status from Printful stock alone. The plugin
+  now marks the products it unpublishes for being sold out, and re-publishes
+  only those, leaving a merchant's own draft alone. A product created while
+  sold out is marked too, so it is republished when it comes back.
+- **A product created but never linked is no longer stranded.** If the link
+  write failed, the per-product error handler swallowed it and the sync step
+  still succeeded — and compensation only runs when a step _fails_, so the
+  orphan was never deleted. The next sync could not see it either, so it
+  created a duplicate. The failing product is now cleaned up where the error is
+  caught.
+- **A return shipping option can now be used.** `validateOption` accepted
+  `PRINTFUL_RETURN` and `canCalculate` excluded it from live rates on purpose,
+  but `validateFulfillmentData` rejected it — so the option could be created
+  and priced, never added to a cart.
+
+### Docs
+
+- The ROADMAP intro said live rates, stock and taxes "remain unwired" at
+  version 0.5.0. Rewritten to say what is actually shipped, what is not, and
+  why returns are held to 1.0.0.
+- The README install snippet omitted `liveShippingRates`,
+  `fallbackShippingRates` and `dependencies: ["query"]`. Without the last one
+  every quote silently falls back to the flat rate.
+
+### Known limits
+
+- **A variant whose link row failed to write is not repaired.** The sync's
+  update path refreshes existing variant links but never creates a missing
+  one, so such a variant stays unlinked. Tracked separately.
+
 ## 0.5.0
 
 What each order cost and what it earned, visible on the order page.

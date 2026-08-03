@@ -9,15 +9,22 @@ plugin in a working state. The testing strategy tightens as the API surface grow
 
 |                       |                                          |
 | --------------------- | ---------------------------------------- |
-| Published version     | `0.5.0`                                  |
-| Tests                 | 192 (179 unit, 13 integration)           |
+| Published version     | `0.5.1`                                  |
+| Tests                 | 256 (235 unit, 21 integration)           |
 | Printful API coverage | 6 of 15 endpoint groups                  |
 | Test layers           | unit + integration against real Postgres |
 
 The plugin covers products, orders, order cancellation, webhook configuration,
-and order status. Out of the fifteen groups Printful exposes that is still a
-narrow band — live shipping rates, stock, taxes, and mockups remain unwired, and
-each is a release below.
+order status, live shipping rates, stock-driven publication, and order costs.
+
+Still unwired: **taxes** (Printful's `/tax/rates` has no documented contract),
+**returns** (API v1 has no endpoint for them at all — only a `package_returned`
+webhook reporting one that already happened), and **mockups**. Returns are
+therefore held to `1.0.0` with API v2; the rest are releases below.
+
+One product gap worth knowing before you deploy: the shipping method the
+customer selected is **not** passed to Printful, which picks its own. See the
+0.3.0 known limits in `CHANGELOG.md`.
 
 ---
 
@@ -115,31 +122,39 @@ found to be dead code, and removed rather than left looking functional.
 
 ## 0.4.0 — Queued sync and catalog awareness `shipped`
 
-Sync runs inside the HTTP request and hits the admin timeout on a large catalog.
-We also cannot see Printful stock: an item can sell out while the store keeps selling it.
+Sync ran inside the HTTP request and hit the admin timeout on a large catalog,
+and Printful stock was invisible: an item could sell out while the store kept
+selling it.
 
-### API surface
+### What shipped
 
-| Endpoint                     | Purpose                                    |
-| ---------------------------- | ------------------------------------------ |
-| `GET /products/variant/{id}` | Blank availability and pricing             |
-| `GET /products/{id}/sizes`   | Size guides for descriptions               |
-| `stock_updated` webhook      | Real-time stock (v2 refreshes every 5 min) |
+- Background sync: the step is `async` + `backgroundExecution`, and the route
+  claims the sync **before** answering `202`, so a double-click cannot start two
+- One sync at a time, enforced by a partial unique index on `status = 'running'`
+  rather than a check-then-insert; a second request gets `409`
+- Heartbeat and progress in `printful_sync_log`, polled by the admin widget
+- A product with no available variant is set to `draft` and republished on
+  restock — the plugin marks what it unpublished so a merchant's own draft is
+  left alone (**the marker was not actually wired until `0.5.1`**)
+- `OrphanTracker` + step compensation: a product created but not linked is
+  deleted on failure (**the swallowed-error path leaked until `0.5.1`**)
+- Options: `syncStaleMinutes`, `onDiscontinued`
 
-### Scope
+### Not built as originally scoped
 
-- Background sync: a step with `async: true`; the route returns `202` and a job id immediately
-- Progress tracked in `printful_sync_log` with status polling in the admin widget
-- Step compensations (absent today) so a partial failure leaves no orphaned products
-- Stock sync: out of stock in Printful → unpublish or set `allow_backorder: false`
-- New `onRemovedFromPrintful` option: `unpublish` | `ignore` | `delete`
+- `allow_backorder: false` on sold-out variants. Variants are synced with
+  `manage_inventory: false`, so Medusa never blocks the sale; publication state
+  is the lever instead. A storefront that wants to hide a sold-out variant
+  reads `printful_availability_status` from variant metadata.
+- `onRemovedFromPrintful` with a `delete` mode. The plugin never deletes a
+  merchant's products; `onDiscontinued` flags them instead.
+- Resume after a crash. A reclaimed sync restarts from the beginning.
 
 ### Testing — adds load and concurrency
 
-- **Volume:** 500 mocked products complete a sync without linear memory growth
-- **Compensation:** failure on product 3 of 5 leaves no half-written rows
-- **Concurrency:** two simultaneous syncs — the second is rejected or queued, never duplicating
-- Resumption: restarting the process mid-sync does not corrupt state
+- **Concurrency:** simultaneous claims against real Postgres — exactly one wins
+- **Compensation:** which products a failed sync may delete, mutation-proved
+- Stale reaping: a claim whose heartbeat lapsed is reclaimed by the next attempt
 
 ---
 

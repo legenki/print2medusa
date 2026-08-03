@@ -40,12 +40,21 @@ plugins: [
       // allowPartialOrders: false,
       // markupPercent: 30,
       // defaultCurrency: "USD",
+
+      // Live shipping rates. `fallbackShippingRates` is required when this is
+      // on — it is what a cart prices at if Printful is unreachable.
+      liveShippingRates: true,
+      fallbackShippingRates: { STANDARD: 700, PRINTFUL_RETURN: 700 },
     },
   },
 ],
 modules: [
   {
     resolve: "@medusajs/medusa/fulfillment",
+    // Required for live rates: the provider resolves each cart line to its
+    // Printful catalog variant through `query`. Without this every quote
+    // silently falls back to the flat rate above.
+    dependencies: ["query"],
     options: {
       providers: [
         {
