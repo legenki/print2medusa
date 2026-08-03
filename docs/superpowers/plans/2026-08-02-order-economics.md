@@ -1,5 +1,23 @@
 # Order Economics Implementation Plan (0.5.0)
 
+> **STATUS — read before following this plan.** 0.5.0 shipped without the
+> zero-decimal currency handling. Tasks 1, 2, 3, 4, 5, 6, 7, 8 and 9 are done
+> and released; **Task 2a and the zero-decimal parts of Tasks 2 and 7 are not**.
+> `src/utils/currency.ts` does not exist, and `toMinorUnits` still takes no
+> currency argument.
+>
+> Two passages below are therefore out of date and were true only while this
+> plan was being written: the claim that "0.5.0 has not shipped" and the claim
+> that there is "nothing to backfill". Order metadata **has** now been stamped,
+> so any JPY or KRW order already recorded holds a value 100× too large, and
+> fixing this needs a backfill decision as well as the code. See the "Known
+> limits" section of `CHANGELOG.md` under 0.5.0.
+>
+> The remaining work is tracked separately. When it is picked up, Tasks 2a, 2
+> and 7 must land **together** — the widget currently divides by 100
+> unconditionally, which cancels the storage error, so correcting only the
+> storage side introduces a visible 100× error where none exists today.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Store what Printful charged for each order on the Medusa order, and show the store owner their margin.
@@ -16,6 +34,21 @@
 A Printful order responds with `costs: { currency: "USD", subtotal: 10, shipping: 5, total: 15, ... }`. Those are floats — `12.34`, not `1234`. Medusa stores `1234`. Every value must be converted, and `12.34 * 100` is `1233.9999999999998` in IEEE-754, so conversion must round rather than truncate.
 
 **This repo has been bitten by money parsing before.** In 0.3.0, review found `parseFloat` accepting `"-4.99"` and silently truncating `"4.99abc"` into `4.99`. The existing `parsePriceToMinorUnits` in `src/utils/mappers.ts` takes a `string` and is used for product retail prices; it is **not** suitable here (costs arrive as `number`, and it returns `0` for anything unparseable, which would silently report a fabricated margin of 100%). Write a separate, stricter converter.
+
+**Not every currency has minor units.** The ×100 above is wrong for
+zero-decimal currencies: ¥1500 is stored by Medusa as `1500`, not `150000`.
+Scaling them anyway produces a value 100x too large for anything that reads it
+back with Medusa's conventions — a CSV export, a report, a native price
+formatter. It is easy to miss because a widget that divides by 100 cancels the
+error out and displays the right number, so nothing looks broken while the
+stored data is wrong. `toMinorUnits` therefore takes the currency, and the
+widget's `formatMinor` must mirror its choice exactly (Tasks 2a, 2, 7).
+
+Because 0.5.0 has not shipped, **no order metadata has ever been stamped by
+this plugin, so there is nothing to backfill.** That is the whole reason to fix
+this before release rather than after: getting it right now costs a parameter,
+getting it right later costs a migration over live order metadata with no
+reliable way to tell corrected rows from uncorrected ones.
 
 **Two cost objects, two meanings.** `costs` is what Printful bills the merchant. `retail_costs` is what the merchant charges the customer, as Printful understands it. Margin is `retail_costs.total − costs.total`, but only when both are in the same currency.
 
@@ -35,6 +68,8 @@ A Printful order responds with `costs: { currency: "USD", subtotal: 10, shipping
 
 | File                                                               | Responsibility                                                                                      |
 | ------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------- |
+| `src/utils/currency.ts` (create)                                   | `isZeroDecimalCurrency`, derived from Medusa's `defaultCurrencies` table                            |
+| `tests/currency.test.ts` (create)                                  | Unit tests for the zero-decimal predicate                                                           |
 | `src/utils/costs.ts` (create)                                      | Pure conversion of Printful cost objects to minor units; margin computation; metadata key constants |
 | `tests/costs.test.ts` (create)                                     | Unit + property-based tests for conversion and margin                                               |
 | `src/utils/types.ts` (modify)                                      | `PrintfulCosts` / `PrintfulRetailCosts` types; add `costs`/`retail_costs` to `PrintfulOrder`        |
@@ -109,6 +144,130 @@ git commit -m "feat: types for Printful order costs"
 
 ---
 
+### Task 2a: Zero-decimal currency predicate
+
+Most currencies have 100 minor units to the major unit, so 12.34 is stored as 1234. Zero-decimal currencies do not: ¥1500 is stored as **1500**. Getting this
+wrong stores a value 100x too large.
+
+**Do not hand-write the list.** `@medusajs/framework/utils` exports
+`defaultCurrencies`, a table whose entries carry `decimal_digits`. Verified
+present in 2.18.0 (39 entries have `decimal_digits === 0`, including JPY, KRW,
+VND, CLP, ISK). Deriving from it means the plugin agrees with Medusa by
+construction.
+
+**This is deliberately not the ISO 4217 exponent-0 list.** Medusa's table marks
+39 currencies zero-decimal where ISO marks about 11; the extras (HUF, IDR, COP,
+CRC, PKR, MUR, RSD, and notably **ISK**) are ISO exponent-2 currencies that
+Medusa treats as zero-decimal by presentation convention. Since the goal is to
+match how **Medusa** stores amounts, Medusa's table wins. Anyone tempted to
+"fix" this toward ISO should change it in one place, here, and watch the tests.
+
+**Files:**
+
+- Create: `src/utils/currency.ts`
+- Create: `tests/currency.test.ts`
+
+- [ ] **Step 1: Write the failing test**
+
+Create `tests/currency.test.ts`:
+
+```typescript
+import { describe, expect, it } from "vitest"
+import { isZeroDecimalCurrency } from "../src/utils/currency"
+
+describe("isZeroDecimalCurrency", () => {
+  it("recognises zero-decimal currencies", () => {
+    expect(isZeroDecimalCurrency("JPY")).toBe(true)
+    expect(isZeroDecimalCurrency("KRW")).toBe(true)
+    expect(isZeroDecimalCurrency("VND")).toBe(true)
+    expect(isZeroDecimalCurrency("CLP")).toBe(true)
+  })
+
+  it("is case insensitive, because Printful sends upper and Medusa stores lower", () => {
+    expect(isZeroDecimalCurrency("jpy")).toBe(true)
+    expect(isZeroDecimalCurrency("JpY")).toBe(true)
+  })
+
+  it("rejects two-decimal currencies", () => {
+    expect(isZeroDecimalCurrency("USD")).toBe(false)
+    expect(isZeroDecimalCurrency("EUR")).toBe(false)
+    expect(isZeroDecimalCurrency("GBP")).toBe(false)
+  })
+
+  it("treats an absent or unknown currency as two-decimal", () => {
+    // The safe default: assuming zero-decimal for an unknown code would
+    // under-store by 100x, which is the louder of the two failures.
+    expect(isZeroDecimalCurrency(undefined)).toBe(false)
+    expect(isZeroDecimalCurrency(null)).toBe(false)
+    expect(isZeroDecimalCurrency("")).toBe(false)
+    expect(isZeroDecimalCurrency("ZZZ")).toBe(false)
+  })
+
+  it("follows Medusa's table rather than ISO 4217 where they differ", () => {
+    // ISO 4217 gives ISK exponent 2; Medusa's defaultCurrencies gives it
+    // decimal_digits 0. We match Medusa, because Medusa is what stores it.
+    expect(isZeroDecimalCurrency("ISK")).toBe(true)
+  })
+})
+```
+
+- [ ] **Step 2: Run it to confirm it fails**
+
+Run: `npx vitest run tests/currency.test.ts`
+Expected: FAIL — `Failed to resolve import "../src/utils/currency"`.
+
+- [ ] **Step 3: Write the implementation**
+
+Create `src/utils/currency.ts`:
+
+```typescript
+import { defaultCurrencies } from "@medusajs/framework/utils"
+
+/**
+ * Currencies whose major unit IS their minor unit — ¥1500 is stored as 1500,
+ * not 150000.
+ *
+ * Derived from Medusa's own currency table rather than a hand-written ISO 4217
+ * list, so the plugin stores amounts the way Medusa reads them. Note the two
+ * disagree: Medusa marks several ISO exponent-2 currencies (ISK, HUF, IDR, …)
+ * as zero-decimal. Medusa's table is the authority here, because Medusa is
+ * what persists the value.
+ */
+const ZERO_DECIMAL_CURRENCIES: ReadonlySet<string> = new Set(
+  Object.values(defaultCurrencies)
+    .filter((c) => c.decimal_digits === 0)
+    .map((c) => c.code.toUpperCase())
+)
+
+/**
+ * An unknown or absent currency is treated as two-decimal. That is the safe
+ * default: it is the overwhelmingly common case, and guessing zero-decimal
+ * would under-store a real amount by 100x.
+ */
+export function isZeroDecimalCurrency(
+  currency: string | null | undefined
+): boolean {
+  if (!currency) {
+    return false
+  }
+  return ZERO_DECIMAL_CURRENCIES.has(currency.toUpperCase())
+}
+```
+
+- [ ] **Step 4: Run the test**
+
+Run: `npx vitest run tests/currency.test.ts`
+Expected: PASS, 5 tests.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/utils/currency.ts tests/currency.test.ts
+git commit -m "feat: zero-decimal currency predicate from Medusa's table"
+```
+
+---
+
 ### Task 2: Money conversion
 
 **Files:**
@@ -173,8 +332,40 @@ describe("toMinorUnits", () => {
   it("accepts a negative amount, because a discount is legitimately negative", () => {
     expect(toMinorUnits(-4.99)).toBe(-499)
   })
+
+  it("does not scale a zero-decimal currency, whose major unit IS its minor unit", () => {
+    // ¥1500 is 1500 in Medusa, not 150000. Scaling by 100 here would store a
+    // value 100x too large for every consumer that reads it back with Medusa's
+    // own conventions — a report, a CSV export, a native price formatter.
+    expect(toMinorUnits(1500, "JPY")).toBe(1500)
+    expect(toMinorUnits(1500, "jpy")).toBe(1500)
+    expect(toMinorUnits("1500", "KRW")).toBe(1500)
+    expect(toMinorUnits(0, "VND")).toBe(0)
+    expect(toMinorUnits(-1500, "CLP")).toBe(-1500)
+  })
+
+  it("rounds a zero-decimal amount to a whole unit", () => {
+    // Printful should never send a fractional yen, but if it does, the stored
+    // value must still be an integer — Medusa amounts are integers.
+    expect(toMinorUnits(1500.4, "JPY")).toBe(1500)
+    expect(toMinorUnits(1500.6, "JPY")).toBe(1501)
+  })
+
+  it("still scales a two-decimal currency, and defaults to scaling", () => {
+    expect(toMinorUnits(12.34, "USD")).toBe(1234)
+    expect(toMinorUnits(12.34, "EUR")).toBe(1234)
+    // No currency given: the safe default is the overwhelmingly common case.
+    expect(toMinorUnits(12.34)).toBe(1234)
+    // An unrecognised code is not assumed to be zero-decimal.
+    expect(toMinorUnits(12.34, "ZZZ")).toBe(1234)
+  })
 })
 ```
+
+**Note on which currencies count as zero-decimal.** Derive this from Medusa's
+own `defaultCurrencies` table (`decimal_digits === 0`), not from a hand-written
+ISO 4217 list — see Task 2a. The two disagree, and Medusa's table is the
+authority on how Medusa stores amounts.
 
 - [ ] **Step 2: Run it to confirm it fails**
 
@@ -194,9 +385,14 @@ Create `src/utils/costs.ts`:
  * `undefined` means "we could not trust this value" and is deliberately
  * distinct from `0`. Reporting an unparseable cost as zero would show the
  * owner a 100% margin on an order that in fact cost them money.
+ *
+ * `currency` decides the scale factor. Zero-decimal currencies (JPY, KRW, …)
+ * have no minor unit, so their amounts pass through unscaled. Omitting it
+ * assumes two decimals, which is right for USD, EUR, and most others.
  */
 export function toMinorUnits(
-  value: string | number | null | undefined
+  value: string | number | null | undefined,
+  currency?: string | null
 ): number | undefined {
   if (value === null || value === undefined || value === "") {
     return 0
@@ -217,14 +413,22 @@ export function toMinorUnits(
     return undefined
   }
 
-  return Math.round(n * 100)
+  // Zero-decimal currencies have no minor unit: ¥1500 is stored as 1500, not
+  // 150000. Scaling them would be a 100x error against Medusa's convention.
+  return Math.round(n * (isZeroDecimalCurrency(currency) ? 1 : 100))
 }
+```
+
+Add the import at the top of the file:
+
+```typescript
+import { isZeroDecimalCurrency } from "./currency"
 ```
 
 - [ ] **Step 4: Run the test**
 
 Run: `npx vitest run tests/costs.test.ts`
-Expected: PASS, 7 tests.
+Expected: PASS, 10 tests.
 
 - [ ] **Step 5: Commit**
 
@@ -450,12 +654,12 @@ export function planCostMetadata(
     if (costCurrency) {
       metadata[COST_CURRENCY_KEY] = costCurrency
     }
-    const total = toMinorUnits(costs.total)
+    const total = toMinorUnits(costs.total, costCurrency)
     if (total !== undefined) {
       metadata[COST_TOTAL_KEY] = total
     }
     for (const field of COST_FIELDS) {
-      const value = toMinorUnits(costs[field])
+      const value = toMinorUnits(costs[field], costCurrency)
       if (value !== undefined && value !== 0) {
         metadata[`printful_cost_${field}`] = value
       }
@@ -466,7 +670,7 @@ export function planCostMetadata(
     if (retailCurrency) {
       metadata[RETAIL_CURRENCY_KEY] = retailCurrency
     }
-    const total = toMinorUnits(retail.total)
+    const total = toMinorUnits(retail.total, retailCurrency)
     if (total !== undefined) {
       metadata[RETAIL_TOTAL_KEY] = total
     }
@@ -684,6 +888,12 @@ git commit -m "feat: refresh costs when a webhook re-reads the order"
 
 ### Task 7: Show margin in the order widget
 
+> **Paired with Task 2a/2 — do not split across releases.** `toMinorUnits`
+> (storage) and `formatMinor` (display) must agree on the scale factor. If the
+> storage side skips the ×100 for JPY but the widget still divides by 100, a
+> ¥1500 order renders as "15.00 JPY". Because this plan introduces both sides
+> at once, there is no window where they disagree — keep it that way.
+
 **Files:**
 
 - Modify: `src/admin/widgets/printful-order-widget.tsx`
@@ -697,15 +907,32 @@ Open the file. It reads `data.metadata` into a `metadata` record at the top and 
 Add above the component:
 
 ```typescript
-/** Minor units to a display string. 1500 with "usd" becomes "15.00 USD". */
+import { isZeroDecimalCurrency } from "../../utils/currency"
+
+/**
+ * Minor units to a display string. 1500 with "usd" becomes "15.00 USD";
+ * 1500 with "jpy" becomes "1500 JPY".
+ *
+ * The zero-decimal branch must match `toMinorUnits` exactly. These two are a
+ * matched pair: a ¥ amount is stored unscaled, so it must be displayed
+ * unscaled. Changing one side alone reintroduces a 100x error.
+ */
 const formatMinor = (amount: unknown, currency: unknown): string | null => {
   if (typeof amount !== "number" || !Number.isFinite(amount)) {
     return null
   }
   const code = typeof currency === "string" ? currency.toUpperCase() : ""
-  return `${(amount / 100).toFixed(2)}${code ? ` ${code}` : ""}`
+  const zeroDecimal = isZeroDecimalCurrency(
+    typeof currency === "string" ? currency : undefined
+  )
+  const shown = zeroDecimal ? amount.toFixed(0) : (amount / 100).toFixed(2)
+  return `${shown}${code ? ` ${code}` : ""}`
 }
 ```
+
+Verify the import path resolves from the widget's directory
+(`src/admin/widgets/`) before moving on — adjust the relative depth if the
+widget sits elsewhere.
 
 Inside the component, before the return, read the values:
 
@@ -806,6 +1033,27 @@ describe("EUR order against USD Printful pricing", () => {
     expect(meta[MARGIN_KEY]).toBeUndefined()
     // 4.99 is the value that truncation would have turned into 498.
     expect(meta["printful_cost_shipping"]).toBe(499)
+  })
+})
+
+describe("JPY order, a zero-decimal currency", () => {
+  it("stores yen unscaled, the way Medusa stores them", () => {
+    // The regression this guards: ¥1500 stored as 150000. It reads correctly
+    // in a widget that divides by 100, so the two errors cancel and nothing
+    // looks broken — but every other consumer (CSV export, report, Medusa's
+    // own price formatter) sees a number 100x too large.
+    const meta = planCostMetadata(
+      order(
+        { currency: "JPY", subtotal: 1200, shipping: 300, total: 1500 },
+        { currency: "JPY", subtotal: 2000, shipping: 500, total: 2500 }
+      )
+    )
+
+    expect(meta[COST_TOTAL_KEY]).toBe(1500)
+    expect(meta[COST_CURRENCY_KEY]).toBe("jpy")
+    expect(meta[RETAIL_TOTAL_KEY]).toBe(2500)
+    expect(meta[MARGIN_KEY]).toBe(1000)
+    expect(meta["printful_cost_shipping"]).toBe(300)
   })
 })
 ```
