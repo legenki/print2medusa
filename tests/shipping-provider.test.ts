@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest"
 import PrintfulFulfillmentProviderService from "../src/providers/printful-fulfillment/service"
 import type { ShippingInfo } from "../src/utils/types"
+import { PRINTFUL_RETURN_OPTION_ID } from "../src/utils/shipping-rates"
 
 const RATES: ShippingInfo[] = [
   { id: "STANDARD", name: "Flat Rate", rate: "4.99", currency: "USD" },
@@ -543,5 +544,35 @@ describe("validateFulfillmentData", () => {
         service.validateFulfillmentData({ id: bad } as never, {}, {})
       ).rejects.toThrow(/unrecognized method id/)
     }
+  })
+
+  it("accepts the return option, which validateOption already allows", async () => {
+    // The return option is a first-class option here: `getFulfillmentOptions`
+    // lists it and `validateOption` accepts it, and `canCalculate` returns
+    // false for it precisely so the admin prices it flat. Rejecting it at this
+    // step made an option the merchant could create but never use — the method
+    // could not be added to a cart at all.
+    const { service } = makeProvider({})
+
+    await expect(
+      service.validateFulfillmentData(
+        { id: PRINTFUL_RETURN_OPTION_ID },
+        { foo: 1 },
+        {}
+      )
+    ).resolves.toEqual({
+      foo: 1,
+      printful_option_id: PRINTFUL_RETURN_OPTION_ID,
+    })
+  })
+
+  it("names the return option in the error listing valid ids", async () => {
+    // The message tells a merchant how to fix a broken option, so omitting the
+    // return id would send them to recreate it against an outbound method.
+    const { service } = makeProvider({})
+
+    await expect(
+      service.validateFulfillmentData({ id: "nonsense" }, {}, {})
+    ).rejects.toThrow(/PRINTFUL_RETURN/)
   })
 })

@@ -169,15 +169,23 @@ class PrintfulFulfillmentProviderService extends AbstractFulfillmentProviderServ
     // Inventing a default would record one method on the order while the
     // customer was priced for another.
     const id = optionData?.id
+    // The return option is accepted here for the same reason `validateOption`
+    // accepts it: it is a real option this provider offers. It is excluded from
+    // live rates in `canCalculate` — Printful quotes outbound shipping only —
+    // not from being usable. Rejecting it here made an option the merchant
+    // could create and price but never add to a cart.
     if (
       typeof id !== "string" ||
-      !(PRINTFUL_SHIPPING_METHODS as readonly string[]).includes(id)
+      !(
+        (PRINTFUL_SHIPPING_METHODS as readonly string[]).includes(id) ||
+        id === PRINTFUL_RETURN_OPTION_ID
+      )
     ) {
       throw new MedusaError(
         MedusaError.Types.INVALID_DATA,
         `Printful shipping option has an unrecognized method id ` +
           `(${JSON.stringify(id)}). Recreate it against one of: ` +
-          `${PRINTFUL_SHIPPING_METHODS.join(", ")}.`
+          `${[...PRINTFUL_SHIPPING_METHODS, PRINTFUL_RETURN_OPTION_ID].join(", ")}.`
       )
     }
     return { ...data, printful_option_id: id }
