@@ -20,6 +20,15 @@ type PrintfulShipment = {
 /** Printful states that mean a human should look at the order; mirrors order-state.ts. */
 const ATTENTION_STATES = new Set(["failed", "canceled", "onhold"])
 
+/** Minor units to a display string. 1500 with "usd" becomes "15.00 USD". */
+const formatMinor = (amount: unknown, currency: unknown): string | null => {
+  if (typeof amount !== "number" || !Number.isFinite(amount)) {
+    return null
+  }
+  const code = typeof currency === "string" ? currency.toUpperCase() : ""
+  return `${(amount / 100).toFixed(2)}${code ? ` ${code}` : ""}`
+}
+
 const PrintfulOrderWidget = ({ data }: DetailWidgetProps<AdminOrder>) => {
   const metadata = (data.metadata ?? {}) as Record<string, unknown>
   const printfulOrderId = metadata.printful_order_id as string | undefined
@@ -34,6 +43,23 @@ const PrintfulOrderWidget = ({ data }: DetailWidgetProps<AdminOrder>) => {
   const shipments = (metadata.printful_shipments ?? []) as PrintfulShipment[]
 
   const isAttention = status ? ATTENTION_STATES.has(status) : false
+
+  const costTotal = formatMinor(
+    metadata.printful_cost_total,
+    metadata.printful_cost_currency
+  )
+  const retailTotal = formatMinor(
+    metadata.printful_retail_total,
+    metadata.printful_retail_currency
+  )
+  const margin = formatMinor(
+    metadata.printful_margin,
+    metadata.printful_cost_currency
+  )
+  // Both totals known but no margin means planCostMetadata withheld it because
+  // the currencies differ — worth saying plainly rather than showing a gap.
+  const currencyMismatch =
+    costTotal !== null && retailTotal !== null && margin === null
 
   return (
     <Container className="divide-y p-0">
@@ -103,6 +129,28 @@ const PrintfulOrderWidget = ({ data }: DetailWidgetProps<AdminOrder>) => {
           </Text>
         ) : null}
       </div>
+      {costTotal ? (
+        <div className="px-6 py-4 flex flex-col gap-2">
+          <Text size="small" weight="plus">
+            Economics
+          </Text>
+          <Text size="small" className="text-ui-fg-subtle">
+            Printful cost: {costTotal}
+          </Text>
+          {retailTotal ? (
+            <Text size="small" className="text-ui-fg-subtle">
+              Retail: {retailTotal}
+            </Text>
+          ) : null}
+          {margin ? <Text size="small">Margin: {margin}</Text> : null}
+          {currencyMismatch ? (
+            <Text size="small" className="text-ui-fg-subtle">
+              Margin unavailable — Printful billed in a different currency than
+              the order.
+            </Text>
+          ) : null}
+        </div>
+      ) : null}
     </Container>
   )
 }
