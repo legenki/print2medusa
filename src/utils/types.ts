@@ -115,6 +115,35 @@ export type PrintfulCreateOrderInput = {
   confirm?: boolean
 }
 
+/**
+ * What Printful bills the merchant. Values are JSON numbers (major units,
+ * e.g. 12.34), except `digitization`, which Printful types as a string.
+ */
+export type PrintfulCosts = {
+  currency?: string
+  subtotal?: number
+  discount?: number
+  shipping?: number
+  digitization?: string | number
+  additional_fee?: number
+  fulfillment_fee?: number
+  retail_delivery_fee?: number
+  tax?: number
+  vat?: number
+  total?: number
+}
+
+/** What the merchant charges the customer, as Printful understands it. */
+export type PrintfulRetailCosts = {
+  currency?: string
+  subtotal?: number
+  discount?: number
+  shipping?: number
+  tax?: number
+  vat?: number
+  total?: number
+}
+
 export type PrintfulOrder = {
   id: number
   external_id?: string | null
@@ -122,6 +151,8 @@ export type PrintfulOrder = {
   shipping?: string
   created?: number
   updated?: number
+  costs?: PrintfulCosts
+  retail_costs?: PrintfulRetailCosts
   recipient?: PrintfulRecipient
   items?: Array<{
     /** Printful line item id, referenced by OrderShipmentItem.item_id. */
