@@ -9,7 +9,7 @@ plugin in a working state. The testing strategy tightens as the API surface grow
 
 |                       |                                                                      |
 | --------------------- | -------------------------------------------------------------------- |
-| Published version     | `0.8.0`                                                              |
+| Published version     | `0.8.1`                                                              |
 | Tests                 | unit (`npm test`) + integration (`test:integration`, needs Postgres) |
 | Printful API coverage | 6 of 15 endpoint groups                                              |
 | Peer range            | `@medusajs/*` `^2.18.0`                                              |
@@ -229,6 +229,21 @@ and could not close.
 - `onRemovedFromPrintful` on full sync (default unpublish; never delete)
 - Peer dependencies widened to `^2.18.0`
 - Storefront guide for `printful_availability_status` (sold-out sizes)
+
+---
+
+## 0.8.1 — Publish from CI `shipped`
+
+Releases were published from a maintainer's machine, so the tarball came from
+whatever was on disk rather than from a checkout known to pass.
+
+### What shipped
+
+- A `v*` tag triggers the full suite — format, both typechecks, unit and
+  integration against Postgres, build — and only then publishes
+- The workflow refuses a tag that disagrees with `package.json`, and refuses a
+  version already on npm
+- `--provenance`, so npm records the repository, commit and workflow
 
 ---
 

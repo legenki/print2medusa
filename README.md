@@ -350,6 +350,25 @@ cannot: that the sync claim is atomic under concurrent inserts, and that a
 redelivered webhook produces one row rather than two — both of which depend on
 real unique-index behaviour.
 
+### Releasing
+
+Publishing runs from CI on a version tag, so the tarball is always built from
+a checkout that passed the full suite rather than from a maintainer's laptop:
+
+```bash
+npm version 0.8.2 --no-git-tag-version   # edit CHANGELOG first
+git commit -am "docs: release 0.8.2"
+git tag -a v0.8.2 -m "0.8.2"
+git push origin main --follow-tags
+```
+
+The workflow refuses to publish if the tag and `package.json` disagree, or if
+that version is already on npm. It publishes with `--provenance`, so npm
+records which repository and workflow built the package.
+
+Needs an `NPM_TOKEN` repository secret — a **granular** automation token
+scoped to this package, not a classic token with account-wide write.
+
 In a host Medusa app:
 
 ```bash

@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.8.1
+
+Publishing moves to CI.
+
+### Changed
+
+- **Releases publish from a version tag**, not from a maintainer's machine.
+  Pushing `vX.Y.Z` runs the full suite — format, both typechecks, unit and
+  integration against a real Postgres, build — and only then publishes. The
+  tarball therefore comes from a checkout that passed, rather than whatever
+  happened to be on the publisher's disk.
+- The workflow **refuses to publish** when the tag and `package.json` disagree,
+  or when that version already exists on npm. Both were previously ways to put
+  a wrong or duplicate version on the registry with no signal until afterwards.
+- Published with **`--provenance`**, so npm records the repository, commit and
+  workflow that built the package.
+
+Requires an `NPM_TOKEN` repository secret. See the release section in the
+README.
+
 ## 0.8.0
 
 Catalog hygiene, easier installs, and storefront guidance for sold-out variants.
@@ -12,7 +32,7 @@ Catalog hygiene, easier installs, and storefront guidance for sold-out variants.
   `printful_removed` + `printful_stock_status: "unavailable"`. A later re-add
   and sync can republish them. Partial syncs (`limit`) never run this pass —
   that would treat the unfetched rest of the catalogue as deleted.
-- **[Storefront availability guide](./docs/storefront-availability.md)** —
+- **[Storefront availability guide](https://github.com/legenki/print2medusa/blob/main/docs/storefront-availability.md)** —
   how to read `printful_availability_status` so a sold-out size is not still
   orderable when `manage_inventory` is false.
 

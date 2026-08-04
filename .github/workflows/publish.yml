@@ -1,0 +1,83 @@
+name: Publish
+
+# Publishing is gated on a tag rather than a branch push, so cutting a release
+# is a deliberate act. Everything CI checks on main runs again here — the tag
+# could point at a commit that never went through a pull request.
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      # Lets npm record where the package was built from, so a consumer can
+      # verify the tarball came from this repository and this workflow.
+      id-token: write
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: print2medusa_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          registry-url: https://registry.npmjs.org
+
+      - run: npm ci
+
+      # Before anything expensive: the tag and package.json must agree.
+      # A mismatch means either the version bump or the tag was wrong, and
+      # publishing either way puts a version on npm that no git tag describes.
+      - name: Check the tag matches package.json
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          PKG="$(node -p "require('./package.json').version")"
+          if [ "$TAG" != "$PKG" ]; then
+            echo "Tag v$TAG does not match package.json $PKG" >&2
+            exit 1
+          fi
+          echo "Publishing $PKG"
+
+      # Refuse to republish a version that already exists. npm would reject it
+      # anyway, but failing here says why instead of surfacing an E403.
+      - name: Check the version is not already published
+        run: |
+          PKG="$(node -p "require('./package.json').version")"
+          if npm view "@legenki/print2medusa@$PKG" version >/dev/null 2>&1; then
+            echo "@legenki/print2medusa@$PKG is already on npm" >&2
+            exit 1
+          fi
+
+      - run: npm run format:check
+      - run: npm run typecheck
+      - run: npm run typecheck:tests
+      - run: npm run test
+      - run: npm run test:integration
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/print2medusa_test
+      - run: npm run build
+
+      # `prepublishOnly` rebuilds, so the tarball is built from this checkout
+      # rather than from whatever happened to be on the publisher's machine.
+      - name: Publish to npm
+        run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
