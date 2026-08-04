@@ -2,7 +2,7 @@
 
 [![npm version](https://img.shields.io/npm/v/@legenki/print2medusa.svg)](https://www.npmjs.com/package/@legenki/print2medusa)
 [![npm downloads](https://img.shields.io/npm/dm/@legenki/print2medusa.svg)](https://www.npmjs.com/package/@legenki/print2medusa)
-[![license](https://img.shields.io/npm/l/@legenki/print2medusa.svg)](./LICENSE)
+[![license](https://img.shields.io/npm/l/@legenki/print2medusa.svg)](https://github.com/legenki/print2medusa/blob/main/LICENSE)
 
 Printful → Medusa v2 plugin: **sync Store Products**, **auto-create Printful orders** on payment capture, and a **Fulfillment Provider** for admin shipping options.
 
@@ -89,6 +89,9 @@ See `examples/basic-store/` for a fuller snippet.
 | -------------------- | ----------------------------------------------------------------------------------------- |
 | Product sync         | Admin **Sync Now** or `POST /admin/printful/sync` → runs in the background, one at a time |
 | Stock awareness      | Variants Printful reports as unavailable unpublish the product; restock republishes it    |
+| Removal handling     | A full sync drafts products that vanished from Printful; a re-add republishes them        |
+| Shipping fidelity    | The method the customer paid for is confirmed with Printful and sent on the order         |
+| Order economics      | Printful's cost and your margin on the Admin order page                                   |
 | Links                | `printful_product_link` / `printful_variant_link` (+ metadata IDs)                        |
 | Orders               | On `payment.captured` → creates Printful order with **`sync_variant_id`**                 |
 | Fulfillment provider | Select Printful shipping option in Admin locations                                        |
@@ -283,7 +286,7 @@ carry `printful_availability_status` in metadata, and discontinued products get
 **Sold-out sizes are still orderable in Medusa cart APIs** (`manage_inventory`
 is false for POD). Hide or disable them in your storefront by reading
 `printful_availability_status` — see
-[docs/storefront-availability.md](./docs/storefront-availability.md).
+[the storefront availability guide](https://github.com/legenki/print2medusa/blob/main/docs/storefront-availability.md).
 
 ### Products removed from Printful
 
@@ -355,7 +358,7 @@ npx medusa plugin:add @legenki/print2medusa
 
 ## Roadmap
 
-See [ROADMAP.md](./ROADMAP.md) for the planned path from `0.2.0` (webhooks and
+See [ROADMAP.md](https://github.com/legenki/print2medusa/blob/main/ROADMAP.md) for the planned path from `0.2.0` (webhooks and
 order status) through `1.0.0` (stable API and Printful v2 migration), including
 the testing strategy for each release.
 
@@ -366,22 +369,23 @@ the testing strategy for each release.
 - Long-running sync runs as a Medusa **workflow** (not a blocking HTTP body only—route awaits the workflow today; can be queued later).
 - Webhooks carry their secret in the URL path because Printful v1 supports no
   custom headers — see [Webhooks](#webhooks).
-- Multi-store polish and Printful API v2: see [ROADMAP.md](./ROADMAP.md).
+- Multi-store polish and Printful API v2: see [ROADMAP.md](https://github.com/legenki/print2medusa/blob/main/ROADMAP.md).
 
 ## Options
 
-| Option                | Description                                                                 |
-| --------------------- | --------------------------------------------------------------------------- |
-| `apiToken`            | Printful private token (required)                                           |
-| `storeId`             | `X-PF-Store-Id` for account-level tokens                                    |
-| `autoSubmitOrders`    | Confirm orders for fulfillment (default true)                               |
-| `createOnOrderPlaced` | Also create Printful order on `order.placed`                                |
-| `allowPartialOrders`  | Allow orders that mix Printful + non-Printful items                         |
-| `markupPercent`       | Markup on retail prices during sync                                         |
-| `defaultCurrency`     | Fallback currency code                                                      |
-| `webhookSecret`       | Shared secret for the Printful webhook path (see [Webhooks](#webhooks))     |
-| `syncStaleMinutes`    | Minutes before a running sync is presumed dead and reclaimed (default 60)   |
-| `onDiscontinued`      | `"flag"` (default) marks discontinued products, `"ignore"` omits the marker |
+| Option                  | Description                                                                        |
+| ----------------------- | ---------------------------------------------------------------------------------- |
+| `apiToken`              | Printful private token (required)                                                  |
+| `storeId`               | `X-PF-Store-Id` for account-level tokens                                           |
+| `autoSubmitOrders`      | Confirm orders for fulfillment (default true)                                      |
+| `createOnOrderPlaced`   | Also create Printful order on `order.placed`                                       |
+| `allowPartialOrders`    | Allow orders that mix Printful + non-Printful items                                |
+| `markupPercent`         | Markup on retail prices during sync                                                |
+| `defaultCurrency`       | Fallback currency code                                                             |
+| `webhookSecret`         | Shared secret for the Printful webhook path (see [Webhooks](#webhooks))            |
+| `syncStaleMinutes`      | Minutes before a running sync is presumed dead and reclaimed (default 60)          |
+| `onDiscontinued`        | `"flag"` (default) marks discontinued products, `"ignore"` omits the marker        |
+| `onRemovedFromPrintful` | `"unpublish"` (default) drafts products gone from Printful, `"ignore"` leaves them |
 
 ## License
 
