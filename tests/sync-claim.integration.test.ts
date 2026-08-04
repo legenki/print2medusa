@@ -221,4 +221,153 @@ describe("sync claim", () => {
     expect(log.products_processed).toBe(7)
     expect(log.products_total).toBe(42)
   })
+
+  describe("clearing a stuck sync", () => {
+    const STALE = new Date(Date.now() - 2 * 60 * 60 * 1000)
+
+    it("clears a stuck sync and frees the claim", async () => {
+      const claim = await service.claimSyncLog(60)
+      await service.updatePrintfulSyncLogs({
+        id: claim!.id,
+        heartbeat_at: STALE,
+      })
+
+      const cleared = await service.clearStuckSyncLog({
+        id: claim!.id,
+        observedHeartbeatAt: STALE,
+        errorMessage: "cleared_by_operator: no heartbeat for 120m",
+      })
+
+      expect(cleared).toBe(true)
+
+      const log = await service.retrievePrintfulSyncLog(claim!.id)
+      expect(log.status).toBe("failed")
+      expect(log.finished_at).toBeTruthy()
+
+      // The point of the whole route: the catalog is unblocked immediately
+      // instead of waiting out syncStaleMinutes.
+      expect(await service.claimSyncLog(60)).toBeTruthy()
+    })
+
+    it("distinguishes an operator clear from a timeout reap in the log", async () => {
+      // Six months later, these two rows must not read the same.
+      const reapMe = await service.claimSyncLog(60)
+      await service.updatePrintfulSyncLogs({
+        id: reapMe!.id,
+        heartbeat_at: STALE,
+      })
+      await service.reapStaleSyncLogs(60)
+
+      const clearMe = await service.claimSyncLog(60)
+      await service.updatePrintfulSyncLogs({
+        id: clearMe!.id,
+        heartbeat_at: STALE,
+      })
+      await service.clearStuckSyncLog({
+        id: clearMe!.id,
+        observedHeartbeatAt: STALE,
+        errorMessage: "cleared_by_operator: no heartbeat for 120m",
+      })
+
+      const reaped = await service.retrievePrintfulSyncLog(reapMe!.id)
+      const cleared = await service.retrievePrintfulSyncLog(clearMe!.id)
+
+      expect(reaped.status).toBe("failed")
+      expect(cleared.status).toBe("failed")
+      // Same terminal status, different cause — and the cause is readable.
+      expect(reaped.error_message).toBe("stale_running")
+      expect(cleared.error_message).toContain("cleared_by_operator")
+      expect(cleared.error_message).not.toBe(reaped.error_message)
+    })
+
+    it("leaves a sync that heartbeats after the decision was made", async () => {
+      // THE race: the route reads a stale heartbeat, decides the sync is dead,
+      // and in that window the sync — which was alive all along — checks in.
+      // The write must not land on a live row.
+      const claim = await service.claimSyncLog(60)
+      await service.updatePrintfulSyncLogs({
+        id: claim!.id,
+        heartbeat_at: STALE,
+      })
+
+      // What the route observed.
+      const observed = STALE
+
+      // The sync wakes up between the route's read and its write.
+      await service.heartbeatSyncLog(claim!.id)
+
+      const cleared = await service.clearStuckSyncLog({
+        id: claim!.id,
+        observedHeartbeatAt: observed,
+        errorMessage: "cleared_by_operator: no heartbeat for 120m",
+      })
+
+      expect(cleared).toBe(false)
+
+      // Still running, still owned by the live sync, still holding the claim.
+      const log = await service.retrievePrintfulSyncLog(claim!.id)
+      expect(log.status).toBe("running")
+      expect(log.error_message).toBeNull()
+      expect(await service.claimSyncLog(60)).toBeNull()
+    })
+
+    it("clears a sync that never got a heartbeat", async () => {
+      const claim = await service.claimSyncLog(60)
+      await service.updatePrintfulSyncLogs({
+        id: claim!.id,
+        heartbeat_at: null,
+      })
+
+      const cleared = await service.clearStuckSyncLog({
+        id: claim!.id,
+        observedHeartbeatAt: null,
+        errorMessage: "cleared_by_operator: no heartbeat since start",
+      })
+
+      expect(cleared).toBe(true)
+      const log = await service.retrievePrintfulSyncLog(claim!.id)
+      expect(log.status).toBe("failed")
+    })
+
+    it("does not clear a sync that gained a heartbeat when there was none", async () => {
+      // Null-heartbeat variant of the race: the route saw no heartbeat at all,
+      // then the sync produced its first one before the write landed.
+      const claim = await service.claimSyncLog(60)
+      await service.updatePrintfulSyncLogs({
+        id: claim!.id,
+        heartbeat_at: null,
+      })
+
+      await service.heartbeatSyncLog(claim!.id)
+
+      const cleared = await service.clearStuckSyncLog({
+        id: claim!.id,
+        observedHeartbeatAt: null,
+        errorMessage: "cleared_by_operator: no heartbeat since start",
+      })
+
+      expect(cleared).toBe(false)
+      const log = await service.retrievePrintfulSyncLog(claim!.id)
+      expect(log.status).toBe("running")
+    })
+
+    it("reports nothing cleared for a sync that already finished", async () => {
+      const claim = await service.claimSyncLog(60)
+      await service.updatePrintfulSyncLogs({
+        id: claim!.id,
+        status: "success",
+        finished_at: new Date(),
+      })
+
+      const cleared = await service.clearStuckSyncLog({
+        id: claim!.id,
+        observedHeartbeatAt: new Date(),
+        errorMessage: "cleared_by_operator: no heartbeat for 120m",
+      })
+
+      expect(cleared).toBe(false)
+      const log = await service.retrievePrintfulSyncLog(claim!.id)
+      expect(log.status).toBe("success")
+    })
+  })
 })

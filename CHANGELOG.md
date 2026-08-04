@@ -1,5 +1,31 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **`GET /admin/printful/history`** — recent sync runs, newest first (20 per
+  page, `limit`/`offset`), with counters, progress and error message.
+- **`GET /admin/printful/health`** — webhook delivery health: when the last
+  event arrived, how many are `deferred` versus permanently `failed`, and
+  whether a webhook is confirmed reaching the store. Answered entirely from
+  local rows and plugin options — it makes **no** call to Printful, so the one
+  page you check during a Printful outage still renders during one.
+- **`POST /admin/printful/sync/clear`** — clear a sync stuck in `running`,
+  closing the limit recorded in 0.4.0. Previously a crashed sync blocked the
+  catalogue for up to `syncStaleMinutes` (default 60) with no way to intervene.
+
+  Two guards, because the operation is destructive: the request must carry
+  `{ "confirm": "clear-stuck-sync" }`, and the server independently verifies
+  the heartbeat really is stale — a sync that is still checking in returns
+  `409` and is left alone. The write is conditional on the heartbeat the
+  request observed, so a sync that revives between the check and the write is
+  not marked failed underneath a live process.
+
+  A row cleared this way records `cleared_by_operator` plus how long the sync
+  had been silent, so it is never confused with the `stale_running` marker the
+  timeout reaper writes.
+
 ## 0.8.1
 
 Publishing moves to CI.
@@ -316,6 +342,8 @@ decides whether a product is published.
   `running` and the widget shows a sync that is not alive. Nothing reclaims it
   until the next sync attempt, so with the default 60 minutes a crash shortly
   after the nightly job means the catalog is blocked until someone tries again.
+  _(Addressed in Unreleased by `POST /admin/printful/sync/clear`, which lets an
+  operator clear a stuck sync without waiting out the window.)_
 - **No resume.** A reclaimed sync restarts from the beginning of the catalog
   rather than continuing where it stopped.
 - **The compensation is unit-tested, not integration-tested.** Which products a

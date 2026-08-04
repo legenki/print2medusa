@@ -377,6 +377,53 @@ class PrintfulModuleService extends MedusaService({
     return log ?? null
   }
 
+  /**
+   * Clear a specific stuck sync on an operator's instruction.
+   *
+   * Separate from `reapStaleSyncLogs` on purpose. That one is the timeout
+   * reaper: it selects its own victims by age and stamps them `stale_running`.
+   * This one clears exactly the row the operator was looking at and records a
+   * marker naming them as the cause, so the two are distinguishable in the log
+   * long after the fact.
+   *
+   * The `heartbeat_at` predicate makes the write conditional on the row still
+   * being as stale as the caller observed. Between the route's read and this
+   * write, a sync everyone believed dead can emit one more heartbeat; without
+   * this predicate that row would be marked `failed` underneath a live
+   * process. With it, the late heartbeat moves `heartbeat_at` past the
+   * observed value, the update matches nothing, and the caller is told the
+   * sync is alive after all.
+   *
+   * Returns true when a row was actually cleared.
+   */
+  async clearStuckSyncLog(input: {
+    id: string
+    /** The heartbeat the caller based its decision on; null if there was none. */
+    observedHeartbeatAt: Date | null
+    errorMessage: string
+  }): Promise<boolean> {
+    const stillStale = await this.listPrintfulSyncLogs({
+      id: input.id,
+      status: "running",
+      heartbeat_at: input.observedHeartbeatAt
+        ? { $lte: input.observedHeartbeatAt }
+        : null,
+    })
+
+    if (stillStale.length === 0) {
+      return false
+    }
+
+    await this.updatePrintfulSyncLogs({
+      id: input.id,
+      status: "failed",
+      error_message: input.errorMessage,
+      finished_at: new Date(),
+    })
+
+    return true
+  }
+
   /** Refresh the claim so it is not reaped, and report progress. */
   async heartbeatSyncLog(
     id: string,
