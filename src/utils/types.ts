@@ -290,3 +290,49 @@ export type StockPlan = {
   /** Availability per Printful sync variant id, for variant metadata. */
   variantAvailability: Record<string, string>
 }
+
+/**
+ * A figure from Printful's statistics report, with its change against the
+ * preceding period of the same length.
+ */
+export type PrintfulStatValue = {
+  value?: number
+  /** Fraction, not percent: 0.12 is a 12% increase. */
+  relative_difference?: number
+}
+
+/** One row of the sales-and-costs time series. */
+export type PrintfulSalesRow = {
+  /** `Y-m-d`, `Y-m`, or the literal "Total" on the first row. */
+  date?: string
+  order_count?: number
+  [key: string]: unknown
+}
+
+/**
+ * Statistics for one Printful store.
+ *
+ * Only the fields the admin page renders are named. Printful returns more —
+ * per-product and per-variant breakdowns — and they are deliberately left
+ * untyped rather than guessed at from an OpenAPI spec whose nested schemas
+ * are thin.
+ */
+export type PrintfulStoreStatistics = {
+  store_id?: number
+  /** Printful's own currency for the report, not necessarily the store's. */
+  currency?: string
+  sales_and_costs_summary?: PrintfulSalesRow[]
+  profit?: PrintfulStatValue
+  total_paid_orders?: PrintfulStatValue
+  /** In seconds. */
+  average_fulfillment_time?: PrintfulStatValue
+}
+
+export type PrintfulStatisticsParams = {
+  /** `Y-m-d`. Required by Printful. */
+  dateFrom: string
+  dateTo: string
+  /** Comma-separated report ids, e.g. "profit,total_paid_orders". */
+  reportTypes: string
+  currency?: string
+}
