@@ -27,12 +27,18 @@ module.exports = defineConfig({
         // allowPartialOrders: false,
         // markupPercent: 30,
         // defaultCurrency: "USD",
+        // onDiscontinued: "flag",
+        // onRemovedFromPrintful: "unpublish", // or "ignore"
+        // liveShippingRates: true,
+        // fallbackShippingRates: { STANDARD: 500 },
       },
     },
   ],
   modules: [
     {
       resolve: "@medusajs/medusa/fulfillment",
+      // Required for live rates + shipping method confirmation.
+      dependencies: ["query"],
       options: {
         providers: [
           {
@@ -45,6 +51,8 @@ module.exports = defineConfig({
             options: {
               apiToken: process.env.PRINTFUL_API_TOKEN,
               storeId: process.env.PRINTFUL_STORE_ID,
+              // liveShippingRates: true,
+              // fallbackShippingRates: { STANDARD: 500 },
             },
           },
         ],

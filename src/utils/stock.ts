@@ -1,3 +1,4 @@
+import { clearRemovedMarker } from "./removed"
 import type { PrintfulSyncVariant, StockPlan } from "./types"
 
 /** Statuses that mean a variant cannot currently be ordered. */
@@ -138,7 +139,7 @@ export function resolveExistingProductWrite(input: {
   // Printful-derived keys win over the stored copies of themselves, but the
   // marker decision is made against the *current* metadata and must survive
   // the merge — the mapper never writes STOCK_MARKER_KEY.
-  const metadata: Record<string, unknown> = {
+  let metadata: Record<string, unknown> = {
     ...publication.metadata,
     ...mappedMetadata,
   }
@@ -148,6 +149,10 @@ export function resolveExistingProductWrite(input: {
   } else {
     metadata[STOCK_MARKER_KEY] = publication.metadata[STOCK_MARKER_KEY]
   }
+
+  // Seen again on Printful — drop the removal flag even if stock still keeps
+  // the product draft (all variants out of stock).
+  metadata = clearRemovedMarker(metadata)
 
   return { status: publication.status, metadata }
 }

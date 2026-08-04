@@ -7,15 +7,16 @@ plugin in a working state. The testing strategy tightens as the API surface grow
 
 ## Where we are
 
-|                       |                                          |
-| --------------------- | ---------------------------------------- |
-| Published version     | `0.7.0`                                  |
-| Tests                 | 320 unit + 21 integration (`test:all`)   |
-| Printful API coverage | 6 of 15 endpoint groups                  |
-| Test layers           | unit + integration against real Postgres |
+|                       |                                                                      |
+| --------------------- | -------------------------------------------------------------------- |
+| Published version     | `0.8.0`                                                              |
+| Tests                 | unit (`npm test`) + integration (`test:integration`, needs Postgres) |
+| Printful API coverage | 6 of 15 endpoint groups                                              |
+| Peer range            | `@medusajs/*` `^2.18.0`                                              |
 
 The plugin covers products, orders, order cancellation, webhook configuration,
-order status, live shipping rates, stock-driven publication, and order costs.
+order status, live shipping rates, stock-driven publication, removal from
+Printful on full sync, order costs, and shipping-method confirmation.
 
 Still unwired: **taxes** (Printful's `/tax/rates` has no documented contract),
 **returns** (API v1 has no endpoint for them at all — only a `package_returned`
@@ -149,8 +150,8 @@ selling it.
   `manage_inventory: false`, so Medusa never blocks the sale; publication state
   is the lever instead. A storefront that wants to hide a sold-out variant
   reads `printful_availability_status` from variant metadata.
-- `onRemovedFromPrintful` with a `delete` mode. The plugin never deletes a
-  merchant's products; `onDiscontinued` flags them instead.
+- `onRemovedFromPrintful` with a `delete` mode — **never offered**. `0.8.0`
+  added `unpublish` \| `ignore` only; the plugin still never deletes products.
 - Resume after a crash. A reclaimed sync restarts from the beginning.
 
 ### Testing — adds load and concurrency
@@ -220,6 +221,14 @@ and could not close.
   condition missing individually sends none, mutation-proved
 - Soft-fail reasons produce data without `printful_shipping`
 - A fresh cache hit confirms without an API call; a stale entry never confirms
+
+---
+
+## 0.8.0 — Removal handling, peers, storefront guide `shipped`
+
+- `onRemovedFromPrintful` on full sync (default unpublish; never delete)
+- Peer dependencies widened to `^2.18.0`
+- Storefront guide for `printful_availability_status` (sold-out sizes)
 
 ---
 

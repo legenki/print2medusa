@@ -1,6 +1,6 @@
 {
   "name": "@legenki/print2medusa",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "Printful \u2192 Medusa v2 plugin: product sync, auto fulfillment, and admin tools",
   "author": "Andy Legenki",
   "license": "MIT",
@@ -78,13 +78,13 @@
     "yalc": "^1.0.0-pre.53"
   },
   "peerDependencies": {
-    "@medusajs/admin-sdk": "2.18.0",
-    "@medusajs/cli": "2.18.0",
-    "@medusajs/framework": "2.18.0",
-    "@medusajs/icons": "2.18.0",
-    "@medusajs/medusa": "2.18.0",
-    "@medusajs/test-utils": "2.18.0",
-    "@medusajs/ui": "4.2.0"
+    "@medusajs/admin-sdk": "^2.18.0",
+    "@medusajs/cli": "^2.18.0",
+    "@medusajs/framework": "^2.18.0",
+    "@medusajs/icons": "^2.18.0",
+    "@medusajs/medusa": "^2.18.0",
+    "@medusajs/test-utils": "^2.18.0",
+    "@medusajs/ui": "^4.2.0"
   },
   "engines": {
     "node": ">=20"

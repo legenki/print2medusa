@@ -21,6 +21,12 @@ import {
   resolveExistingProductWrite,
   STOCK_MARKER_KEY,
 } from "../utils/stock"
+import {
+  findMissingSyncProductLinks,
+  planRemovedProductWrite,
+  shouldRunRemovalPass,
+  type OnRemovedFromPrintful,
+} from "../utils/removed"
 
 export type SyncProductsInput = {
   /** The claimed sync log. The workflow never claims — the route already did. */
@@ -327,6 +333,68 @@ const syncProductsStep = createStep(
           products_processed: processed,
           products_total: toProcess.length,
         })
+      }
+    }
+
+    // Products that disappeared from Printful. Only a full catalogue pass may
+    // do this — a `limit` would treat everything beyond the page as removed.
+    // The decision lives in `shouldRunRemovalPass` so it is covered by a test:
+    // this is the one condition whose failure unpublishes a live catalogue.
+    {
+      const removalPolicy: OnRemovedFromPrintful =
+        options.onRemovedFromPrintful ?? "unpublish"
+
+      if (shouldRunRemovalPass({ policy: removalPolicy, limit: input.limit })) {
+        try {
+          const seenIds = summaries.map((s) => String(s.id))
+          // Include ignored Printful rows: they still exist in the store.
+          const links = await printful.listPrintfulProductLinks(
+            { printful_store_id: storeId },
+            { take: 100_000 }
+          )
+          const missing = findMissingSyncProductLinks(links, seenIds)
+
+          for (const link of missing) {
+            try {
+              const product = await productModule.retrieveProduct(
+                link.medusa_product_id
+              )
+              const plan = planRemovedProductWrite({
+                policy: removalPolicy,
+                currentStatus:
+                  product.status === "published" ? "published" : "draft",
+                currentMetadata: (product.metadata ?? {}) as Record<
+                  string,
+                  unknown
+                >,
+              })
+
+              if (plan.action === "unpublish") {
+                await productModule.updateProducts(link.medusa_product_id, {
+                  status: plan.status,
+                  metadata: plan.metadata,
+                })
+                counters.updated += 1
+              }
+            } catch (err) {
+              counters.failed += 1
+              const message = err instanceof Error ? err.message : String(err)
+              counters.errors.push(
+                `Removed product ${link.printful_sync_product_id}: ${message}`
+              )
+            }
+
+            await printful.heartbeatSyncLog(input.sync_log_id, {
+              products_processed: processed,
+              products_total: toProcess.length,
+            })
+          }
+        } catch (err) {
+          counters.failed += 1
+          const message = err instanceof Error ? err.message : String(err)
+          counters.errors.push(`Removal pass failed: ${message}`)
+          logger.error(`Printful sync removal pass failed: ${message}`)
+        }
       }
     }
 

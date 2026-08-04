@@ -1,4 +1,6 @@
 export * from "./errors"
 export * from "./mappers"
 export * from "./printful-client"
+export * from "./removed"
+export * from "./stock"
 export * from "./types"

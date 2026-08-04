@@ -24,6 +24,16 @@ export type PrintfulPluginOptions = {
   syncStaleMinutes?: number
   /** What to do with variants Printful reports as discontinued. Default "flag". */
   onDiscontinued?: "flag" | "ignore"
+  /**
+   * What to do when a linked product no longer appears in the Printful store
+   * catalogue after a **full** sync. Default `"unpublish"`.
+   *
+   * - `unpublish` — set to draft and mark so a later re-add can republish
+   * - `ignore` — leave Medusa publication alone
+   *
+   * Never deletes products. Skipped when the sync runs with `limit` (partial).
+   */
+  onRemovedFromPrintful?: "unpublish" | "ignore"
 }
 
 export type PrintfulApiResponse<T> = {

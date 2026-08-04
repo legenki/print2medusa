@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest"
+import { REMOVED_MARKER_KEY } from "../src/utils/removed"
 import {
   planStockActions,
   resolveExistingProductWrite,
@@ -233,6 +234,22 @@ describe("resolveExistingProductWrite", () => {
     })
 
     expect(result.status).toBe("published")
+    expect(result.metadata[STOCK_MARKER_KEY]).toBeUndefined()
+  })
+
+  it("clears printful_removed when the product is seen on Printful again", () => {
+    const result = resolveExistingProductWrite({
+      plan: availablePlan,
+      currentStatus: "draft",
+      currentMetadata: {
+        [STOCK_MARKER_KEY]: "unavailable",
+        [REMOVED_MARKER_KEY]: true,
+      },
+      mappedMetadata: { printful_sync_product_id: "77" },
+    })
+
+    expect(result.status).toBe("published")
+    expect(result.metadata[REMOVED_MARKER_KEY]).toBeUndefined()
     expect(result.metadata[STOCK_MARKER_KEY]).toBeUndefined()
   })
 

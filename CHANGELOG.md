@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.8.0
+
+Catalog hygiene, easier installs, and storefront guidance for sold-out variants.
+
+### Added
+
+- **`onRemovedFromPrintful`** (`"unpublish"` \| `"ignore"`, default `"unpublish"`).
+  After a **full** sync, products that still have a link row but no longer
+  appear in the Printful store catalogue are set to `draft` and marked with
+  `printful_removed` + `printful_stock_status: "unavailable"`. A later re-add
+  and sync can republish them. Partial syncs (`limit`) never run this pass —
+  that would treat the unfetched rest of the catalogue as deleted.
+- **[Storefront availability guide](./docs/storefront-availability.md)** —
+  how to read `printful_availability_status` so a sold-out size is not still
+  orderable when `manage_inventory` is false.
+
+### Changed
+
+- **Peer dependencies are `^2.18.0`** (and `^4.2.0` for `@medusajs/ui`) so a
+  host on 2.19+ can install without an exact-pin fight. DevDependencies stay
+  pinned for reproducible CI builds of this package.
+
+### Fixed
+
+- Removal markers are cleared when a product is seen on Printful again during
+  a normal update sync.
+
 ## 0.7.0
 
 Printful now ships the method the customer paid for.

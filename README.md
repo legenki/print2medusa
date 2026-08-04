@@ -11,7 +11,7 @@ Published on npm as [`@legenki/print2medusa`](https://www.npmjs.com/package/@leg
 ## Requirements
 
 - Node.js ≥ 20
-- Medusa **2.18.x** (peer dependency)
+- Medusa **≥ 2.18.0** (peer dependency `^2.18.0`)
 - Printful store on the **Manual order / API** platform with a private token (`orders`, `sync_products` scopes)
 
 ## Install
@@ -246,11 +246,9 @@ cart — the whole response is cached, and each option is picked from it locally
 
 ### Limits worth knowing
 
-- **Printful chooses the shipping method on the order.** The method the customer
-  selected is priced correctly but is not passed through to Printful, so it can
-  ship by a different service. Medusa does not carry provider data from price
-  calculation onto the shipping method, and the mechanism that would fix this
-  needs its own release.
+- **A method override is sent only when Printful confirmed it live** at selection
+  (`rate_source: "live"`). Fallback pricing still lets checkout complete; the
+  order then lets Printful pick the method. See the 0.7.0 changelog.
 - **Return options are never priced live.** Printful quotes outbound shipping
   only, so a return shipping option must be given a flat admin price.
 - **Rates are quoted in the cart's currency** by asking Printful to convert. If
@@ -281,6 +279,18 @@ and republished when it comes back. The plugin only republishes what it
 unpublished itself — a product you set to draft by hand stays draft. Variants
 carry `printful_availability_status` in metadata, and discontinued products get
 `printful_discontinued` unless `onDiscontinued: "ignore"`.
+
+**Sold-out sizes are still orderable in Medusa cart APIs** (`manage_inventory`
+is false for POD). Hide or disable them in your storefront by reading
+`printful_availability_status` — see
+[docs/storefront-availability.md](./docs/storefront-availability.md).
+
+### Products removed from Printful
+
+After a **full** sync, linked products that no longer appear in the Printful
+store list are unpublished by default (`onRemovedFromPrintful: "unpublish"`).
+Use `"ignore"` to leave publication alone. The plugin never deletes products.
+Partial syncs with `limit` skip this pass.
 
 ## Order economics
 
@@ -356,7 +366,7 @@ the testing strategy for each release.
 - Long-running sync runs as a Medusa **workflow** (not a blocking HTTP body only—route awaits the workflow today; can be queued later).
 - Webhooks carry their secret in the URL path because Printful v1 supports no
   custom headers — see [Webhooks](#webhooks).
-- Multi-store / live rates: planned Phase 2.
+- Multi-store polish and Printful API v2: see [ROADMAP.md](./ROADMAP.md).
 
 ## Options
 
