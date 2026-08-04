@@ -9,14 +9,15 @@ plugin in a working state. The testing strategy tightens as the API surface grow
 
 |                       |                                                                      |
 | --------------------- | -------------------------------------------------------------------- |
-| Published version     | `0.8.1`                                                              |
+| Published version     | `0.8.2`                                                              |
 | Tests                 | unit (`npm test`) + integration (`test:integration`, needs Postgres) |
 | Printful API coverage | 6 of 15 endpoint groups                                              |
 | Peer range            | `@medusajs/*` `^2.18.0`                                              |
 
 The plugin covers products, orders, order cancellation, webhook configuration,
 order status, live shipping rates, stock-driven publication, removal from
-Printful on full sync, order costs, and shipping-method confirmation.
+Printful on full sync, order costs, shipping-method confirmation, and a
+Printful admin page with sales figures, sync history and webhook health.
 
 Still unwired: **taxes** (Printful's `/tax/rates` has no documented contract),
 **returns** (API v1 has no endpoint for them at all — only a `package_returned`
@@ -244,6 +245,31 @@ whatever was on disk rather than from a checkout known to pass.
 - The workflow refuses a tag that disagrees with `package.json`, and refuses a
   version already on npm
 - `--provenance`, so npm records the repository, commit and workflow
+
+---
+
+## 0.8.2 — Printful admin page `shipped`
+
+Sales figures, sync history and webhook health had no home, and a sync the
+process died under blocked the catalogue for up to an hour with no way to
+intervene.
+
+### What shipped
+
+- A "Printful" section in the admin sidebar
+- `GET /admin/printful/statistics`, `/history`, `/health`
+- `POST /admin/printful/sync/clear`, closing the limit `0.4.0` recorded
+
+### The rules that govern it
+
+- **Health never calls Printful.** A panel reporting whether Printful reaches
+  you must render during a Printful outage.
+- **Statistics does**, because the figures do not exist locally — so its
+  failure answers `200` with an empty list rather than blanking the page.
+- **Clearing is guarded twice**: a typed confirmation proves intent, and a
+  server-side heartbeat check proves the operator is right. The write is
+  conditional on the heartbeat observed, so a revived sync is never marked
+  failed underneath a live process.
 
 ---
 

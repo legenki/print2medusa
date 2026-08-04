@@ -1,9 +1,21 @@
 # Changelog
 
-## Unreleased
+## 0.8.2
+
+A dedicated Printful page in the admin, and a way out of a stuck sync.
 
 ### Added
 
+- **A "Printful" section in the admin sidebar** gathering what previously had
+  no home: sales figures, webhook health, sync history with live progress, and
+  the stuck-sync recovery below. The clear button is offered on a client-side
+  guess about the heartbeat and the server checks again — so a wrong guess
+  costs a `409` and a "still alive" message, never a killed sync.
+- **`GET /admin/printful/statistics`** — sales and profit from Printful's
+  `/reports/statistics`. Unlike `/health` this one genuinely has to call
+  Printful, so an outage answers `200` with an empty list rather than an error:
+  the page fetches its panels independently and a throw here would blank the
+  one screen an owner opens _because_ something is wrong.
 - **`GET /admin/printful/history`** — recent sync runs, newest first (20 per
   page, `limit`/`offset`), with counters, progress and error message.
 - **`GET /admin/printful/health`** — webhook delivery health: when the last
@@ -25,6 +37,22 @@
   A row cleared this way records `cleared_by_operator` plus how long the sync
   had been silent, so it is never confused with the `stale_running` marker the
   timeout reaper writes.
+
+### Known limits
+
+- **A sub-millisecond race remains in the clear path.** The heartbeat check and
+  the write are two statements rather than one atomic `UPDATE ... WHERE`. To
+  hit it, a sync would have to be silent for the full stale window and then
+  revive in that exact instant. The loser is a `failed` row under a live sync,
+  which the next claim reaps normally. Closing it fully means dropping to raw
+  SQL, which this module does only for `pg_advisory_xact_lock`.
+- **`registered` in the health response is evidence-based, not authoritative.**
+  It requires both a configured secret and a delivered event, so a store with a
+  secret but nothing received reads "configured, nothing received yet" — which
+  is exactly the state a misconfigured webhook leaves behind.
+- **History and health have no route-level integration tests** — unit tests on
+  the extracted helpers plus service-level integration coverage, matching how
+  `status` and `sync` are already tested.
 
 ## 0.8.1
 
