@@ -426,3 +426,87 @@ describe("request deadline", () => {
     expect(first).not.toBe(second)
   })
 })
+
+describe("getStatistics", () => {
+  it("sends the date range, report types and currency as query params", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          code: 200,
+          result: { store_statistics: [{ store_id: 1, currency: "USD" }] },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      )
+    )
+
+    const client = new PrintfulClient({
+      apiToken: "t",
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      maxRetries: 0,
+    })
+
+    await client.getStatistics({
+      dateFrom: "2026-07-01",
+      dateTo: "2026-07-31",
+      reportTypes: "profit,total_paid_orders",
+      currency: "USD",
+    })
+
+    const url = String(fetchImpl.mock.calls[0][0])
+    expect(url).toContain("/reports/statistics")
+    expect(url).toContain("date_from=2026-07-01")
+    expect(url).toContain("date_to=2026-07-31")
+    expect(url).toContain("report_types=profit%2Ctotal_paid_orders")
+    expect(url).toContain("currency=USD")
+  })
+
+  it("omits currency when it was not asked for", async () => {
+    // Printful reports in the store's own currency when none is given.
+    // Sending an empty one would be a different request, not a default.
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ code: 200, result: {} }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })
+    )
+
+    const client = new PrintfulClient({
+      apiToken: "t",
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      maxRetries: 0,
+    })
+
+    await client.getStatistics({
+      dateFrom: "2026-07-01",
+      dateTo: "2026-07-31",
+      reportTypes: "profit",
+    })
+
+    expect(String(fetchImpl.mock.calls[0][0])).not.toContain("currency=")
+  })
+
+  it("returns an empty list rather than undefined when Printful reports none", async () => {
+    // The admin page maps over this. A missing key must not become a crash on
+    // a page whose whole job is telling the owner what is going on.
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ code: 200, result: {} }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })
+    )
+
+    const client = new PrintfulClient({
+      apiToken: "t",
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      maxRetries: 0,
+    })
+
+    const stats = await client.getStatistics({
+      dateFrom: "2026-07-01",
+      dateTo: "2026-07-31",
+      reportTypes: "profit",
+    })
+
+    expect(stats).toEqual([])
+  })
+})

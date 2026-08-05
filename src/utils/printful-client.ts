@@ -9,6 +9,8 @@ import type {
   PrintfulWebhookConfig,
   ShippingInfo,
   ShippingRatesRequest,
+  PrintfulStatisticsParams,
+  PrintfulStoreStatistics,
 } from "./types"
 import { PRINTFUL_WEBHOOK_TYPES } from "./webhook-events"
 
@@ -173,6 +175,35 @@ export class PrintfulClient {
       method: "DELETE",
     })
     return data.result ?? { url: null, types: [] }
+  }
+
+  /**
+   * Sales, costs and profit for a date range.
+   *
+   * Returns the per-store list, empty when Printful reports none — the admin
+   * page maps over this, and a missing key must not crash the one screen whose
+   * job is telling the owner what is going on.
+   *
+   * `currency` is omitted rather than defaulted when absent: Printful then
+   * reports in the store's own currency, which is a different request from
+   * asking for a specific one.
+   */
+  async getStatistics(
+    params: PrintfulStatisticsParams
+  ): Promise<PrintfulStoreStatistics[]> {
+    const search = new URLSearchParams()
+    search.set("date_from", params.dateFrom)
+    search.set("date_to", params.dateTo)
+    search.set("report_types", params.reportTypes)
+    if (params.currency) {
+      search.set("currency", params.currency)
+    }
+
+    const data = await this.request<{
+      store_statistics?: PrintfulStoreStatistics[]
+    }>(`/reports/statistics?${search.toString()}`)
+
+    return data.result?.store_statistics ?? []
   }
 
   /**

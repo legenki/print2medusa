@@ -96,6 +96,7 @@ See `examples/basic-store/` for a fuller snippet.
 | Orders               | On `payment.captured` → creates Printful order with **`sync_variant_id`**                 |
 | Fulfillment provider | Select Printful shipping option in Admin locations                                        |
 | Status               | `GET /admin/printful/status` + product list widget                                        |
+| Admin page           | **Printful** in the sidebar: sales, sync history, webhook health, stuck-sync recovery     |
 | Shipment tracking    | Printful webhooks → Medusa fulfillment + shipment per parcel, with tracking               |
 | Order visibility     | Printful status and per-parcel tracking on the Admin order page                           |
 
@@ -319,6 +320,35 @@ per-fee breakdown. Those three are always written together from one response,
 so they cannot disagree; the individual `printful_cost_*` fee keys are refreshed
 per-key and a fee absent from a later response keeps its previous value, so a
 breakdown need not sum to the total.
+
+## The Printful admin page
+
+A **Printful** section in the sidebar, gathering what the widgets could not:
+
+- **Sales** — paid orders and profit from Printful's own reporting
+- **Webhooks** — when the last event arrived, how many are waiting or failed
+- **Recent syncs** — status, counters, and live progress while one runs
+- **Stuck sync recovery** — see below
+
+Two of these behave differently on purpose. **Webhook health never calls
+Printful**: a panel whose job is reporting whether Printful reaches you must
+still render when Printful is down, so it answers from local rows. **Sales does
+call Printful**, because the figures do not exist locally — and an outage
+answers with an empty panel rather than blanking the page.
+
+### When a sync gets stuck
+
+If Medusa dies mid-sync, the run stays `running` and nothing else can start
+until it is reclaimed — up to `syncStaleMinutes`, one hour by default. The page
+notices and offers to clear it.
+
+Clearing is deliberately awkward, because it is destructive. The request must
+carry a typed confirmation, and the **server** re-checks the heartbeat: if the
+sync is actually alive, it refuses and tells you so. A wrong guess costs a
+message, never a killed sync.
+
+A run cleared by a person is recorded as `cleared_by_operator` with how long it
+had been silent, so it is never confused with one the timeout reaped.
 
 ## Admin usage
 
