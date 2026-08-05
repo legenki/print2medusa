@@ -2,27 +2,35 @@
 
 From catalog sync to a complete Printful backend.
 
-Five releases, each closing one coherent Printful capability and leaving the
-plugin in a working state. The testing strategy tightens as the API surface grows.
+Each release closes one coherent Printful capability and leaves the plugin in a
+working state. The testing strategy tightens as the API surface grows.
+
+Nine releases so far, `0.1.0` through `0.8.2`. Three of them — `0.5.1`, `0.5.2`,
+`0.5.3` — exist because external review found defects in shipped code; what they
+fixed is recorded in `CHANGELOG.md` rather than quietly amended.
 
 ## Where we are
 
-|                       |                                                                      |
-| --------------------- | -------------------------------------------------------------------- |
-| Published version     | `0.8.2`                                                              |
-| Tests                 | unit (`npm test`) + integration (`test:integration`, needs Postgres) |
-| Printful API coverage | 6 of 15 endpoint groups                                              |
-| Peer range            | `@medusajs/*` `^2.18.0`                                              |
+|                   |                                                                      |
+| ----------------- | -------------------------------------------------------------------- |
+| Published version | `0.8.2`                                                              |
+| Tests             | unit (`npm test`) + integration (`test:integration`, needs Postgres) |
+| Printful API used | store products, orders, shipping rates, webhooks, reports            |
+| Peer range        | `@medusajs/*` `^2.18.0`                                              |
 
 The plugin covers products, orders, order cancellation, webhook configuration,
 order status, live shipping rates, stock-driven publication, removal from
 Printful on full sync, order costs, shipping-method confirmation, and a
 Printful admin page with sales figures, sync history and webhook health.
 
-Still unwired: **taxes** (Printful's `/tax/rates` has no documented contract),
-**returns** (API v1 has no endpoint for them at all — only a `package_returned`
-webhook reporting one that already happened), and **mockups**. Returns are
-therefore held to `1.0.0` with API v2; the rest are releases below.
+Still unwired: **taxes** (Printful's `/tax/rates` exists but its request and
+response schemas are undocumented, so implementing a Medusa tax provider against
+it would be guesswork), **returns** (API v1 has no endpoint for them at all —
+only a `package_returned` webhook reporting one that already happened), and
+**mockups** (v1 has the endpoints; simply not built yet).
+
+Only returns genuinely require API v2, which is why they alone are held to
+`1.0.0`.
 
 Since `0.7.0` the shipping method the customer selected is confirmed with
 Printful and sent on the order — when Printful confirms it. See the 0.7.0
@@ -283,8 +291,11 @@ delivery dates.
 
 - Client abstraction layer: v1 and v2 behind one interface, switchable by option
 - **Real returns** with a return label — impossible on v1, which has no returns endpoint
-- Multi-store support — `storeId` already exists in the link models; finish it
-- Mockup Generator: generate previews during sync (`/mockups`)
+- **Multi-store** — a rework, not a completion. `printful_store_id` is written on
+  every link row and lookups filter by it, but `getStoreId()` returns a **single**
+  value from plugin options; real multi-store needs a token per store
+- Mockup Generator and File Library — **both exist in API v1**, so neither depends
+  on the v2 migration; they sit here only because they suit a major release
 - Public contract: exported types, documented option semantics, deprecation policy
 - Automated npm publishing on git tag via a granular access token
 
