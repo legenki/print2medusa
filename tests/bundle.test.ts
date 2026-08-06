@@ -4,6 +4,7 @@ import {
   bundleMembersOf,
   expandOrderLines,
   isBundleLine,
+  medusaLineIdFor,
   planBundleAvailability,
 } from "../src/utils/bundle"
 
@@ -129,6 +130,31 @@ describe("bundleMembersOf", () => {
         metadata: { [BUNDLE_MEMBERS_KEY]: "tee, sticker" },
       } as never)
     ).toEqual([])
+  })
+})
+
+describe("medusaLineIdFor", () => {
+  it("maps an expanded item back to the bundle line the customer bought", () => {
+    // The defect this prevents: apply-order-status joins a parcel to a Medusa
+    // line by external_id. A synthetic id matches no line, so every parcel
+    // clamps to zero open quantity and the order is never marked shipped.
+    const out = expandOrderLines([bundleLine])
+    expect(out.map((l) => medusaLineIdFor(l.id))).toEqual([
+      "item_bundle",
+      "item_bundle",
+      "item_bundle",
+    ])
+  })
+
+  it("leaves an ordinary line id untouched", () => {
+    expect(medusaLineIdFor("ordli_01JABC")).toBe("ordli_01JABC")
+  })
+
+  it("splits on the first separator only", () => {
+    // Medusa ids are ULID-based and contain no colons, but a variant id is
+    // merchant-controlled. Splitting on the last separator would attribute the
+    // parcel to a line id that does not exist.
+    expect(medusaLineIdFor("item_bundle::var::odd")).toBe("item_bundle")
   })
 })
 

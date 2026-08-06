@@ -129,6 +129,28 @@ export function expandOrderLines(
   return out
 }
 
+/** Separates the bundle line id from the member variant id in a synthetic id. */
+const SYNTHETIC_SEPARATOR = "::"
+
+/**
+ * The Medusa line an `external_id` from Printful refers to.
+ *
+ * Expansion sends synthetic ids like `ordli_abc::variant_tee` as `external_id`,
+ * because Printful needs each item distinguishable and two members of one
+ * bundle would otherwise share the bundle line's id.
+ *
+ * Fulfillment reads those ids back to decide which Medusa line a parcel filled.
+ * Without this, a bundle's items resolve to an id no Medusa line has, every
+ * parcel clamps to zero open quantity, and the order is never marked shipped.
+ *
+ * A member id maps back to the *bundle* line, since that is the line the
+ * customer bought and the only one Medusa can fulfil.
+ */
+export function medusaLineIdFor(externalId: string): string {
+  const at = externalId.indexOf(SYNTHETIC_SEPARATOR)
+  return at === -1 ? externalId : externalId.slice(0, at)
+}
+
 /** Statuses meaning a variant cannot be ordered. Mirrors `stock.ts`. */
 const UNAVAILABLE = new Set([
   "out_of_stock",
