@@ -56,6 +56,24 @@ type PromptRow = {
   prompts: Array<{ text: string; label: string; placement: string }>
 }
 
+type BundleRow = {
+  product_id: string
+  variant_id: string
+  title: string
+  variant_title?: string | null
+  status: string
+  available: boolean
+  member_count: number
+  missing_count: number
+  members: Array<{
+    variant_id: string
+    quantity: number
+    title: string | null
+    product_title: string | null
+    status: string
+  }>
+}
+
 type DesignRow = {
   product_id: string
   title: string
@@ -128,6 +146,7 @@ const PrintfulPage = () => {
   const [health, setHealth] = useState<Health | null>(null)
   const [stats, setStats] = useState<Stats | null>(null)
   const [designs, setDesigns] = useState<DesignRow[]>([])
+  const [bundles, setBundles] = useState<BundleRow[]>([])
   const [promptProducts, setPromptProducts] = useState<PromptRow[]>([])
   const [styles, setStyles] = useState<Array<{ id: string; label: string }>>([])
   const [style, setStyle] = useState("editorial")
@@ -141,11 +160,12 @@ const PrintfulPage = () => {
     // Each panel is fetched independently and failures are swallowed per
     // panel: this is the screen an owner opens *because* something is wrong,
     // so one dead endpoint must not blank the other two.
-    const [h, w, s, d] = await Promise.allSettled([
+    const [h, w, s, d, b] = await Promise.allSettled([
       fetch("/admin/printful/history", { credentials: "include" }),
       fetch("/admin/printful/health", { credentials: "include" }),
       fetch("/admin/printful/statistics", { credentials: "include" }),
       fetch("/admin/printful/design", { credentials: "include" }),
+      fetch("/admin/printful/bundles", { credentials: "include" }),
     ])
 
     if (h.status === "fulfilled" && h.value.ok) {
@@ -162,6 +182,10 @@ const PrintfulPage = () => {
     if (d.status === "fulfilled" && d.value.ok) {
       const body = await d.value.json()
       setDesigns(body.designs ?? [])
+    }
+    if (b.status === "fulfilled" && b.value.ok) {
+      const body = await b.value.json()
+      setBundles(body.bundles ?? [])
     }
     setLoading(false)
   }, [])
@@ -416,6 +440,65 @@ const PrintfulPage = () => {
                   {d.sizes.length > 8 ? ` +${d.sizes.length - 8}` : ""}
                 </Text>
               )}
+            </div>
+          ))
+        )}
+      </div>
+
+      <div className="px-6 py-4 flex flex-col gap-3">
+        <Text size="small" weight="plus">
+          Bundles
+        </Text>
+        {bundles.length === 0 ? (
+          <Text size="small" className="text-ui-fg-subtle">
+            {loading
+              ? "Loading…"
+              : "No bundles yet. Add printful_bundle_members to a variant's metadata to make it a bundle."}
+          </Text>
+        ) : (
+          bundles.map((b) => (
+            <div key={b.variant_id} className="flex flex-col gap-1">
+              <div className="flex items-center gap-2">
+                <Text size="small" weight="plus">
+                  {b.title}
+                </Text>
+                {/* Two separate facts, deliberately not merged. `available`
+                    is what Printful stock implies; `status` is what the
+                    product actually is. They disagree between a member
+                    selling out and the next sync, and an owner debugging a
+                    failed order needs to see which one is which. */}
+                <Badge color={b.available ? "green" : "red"}>
+                  {b.available ? "all members in stock" : "member unavailable"}
+                </Badge>
+                <Badge color={b.status === "published" ? "green" : "grey"}>
+                  {b.status}
+                </Badge>
+                {b.missing_count > 0 && (
+                  <Badge color="orange">
+                    {b.missing_count} member
+                    {b.missing_count === 1 ? "" : "s"} not found
+                  </Badge>
+                )}
+              </div>
+
+              {b.members.map((m) => (
+                <Text
+                  key={m.variant_id}
+                  size="small"
+                  className="text-ui-fg-subtle pl-3"
+                >
+                  {m.quantity}× {m.product_title ?? "—"}
+                  {m.title ? ` · ${m.title}` : ""}
+                  {/* A member whose variant no longer exists is the likeliest
+                      reason a bundle order fails, and it shows up nowhere
+                      else in the admin. */}
+                  {m.status === "missing"
+                    ? " — variant not found"
+                    : m.status === "active" || m.status === "unknown"
+                      ? ""
+                      : ` — ${m.status.replace(/_/g, " ")}`}
+                </Text>
+              ))}
             </div>
           ))
         )}
