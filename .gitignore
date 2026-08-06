@@ -25,3 +25,7 @@ build
 
 .medusa
 .claude
+
+# Raw Printful API probe responses (issue #11). Local research output,
+# not source: they carry store-specific data and change with the catalogue.
+.probe/
