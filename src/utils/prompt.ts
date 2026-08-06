@@ -160,6 +160,128 @@ const PRINT_NOUN: Record<string, string> = {
 }
 
 /**
+ * How light a hex colour is, `0` (black) to `1` (white), or nothing.
+ *
+ * Uses the Rec. 709 luma weights rather than a plain channel average, because
+ * the eye is not equally sensitive to the three channels: `#00ff00` and
+ * `#0000ff` average identically and look nothing alike. Aqua `#008db5` is a
+ * mid tone by luma and a dark one by naive average, and it is the tee's most
+ * common colour.
+ *
+ * Returns `undefined` on anything it cannot parse — never `0`. Absence has to
+ * stay distinguishable from black, exactly as it does in `normalizeHex`: a
+ * malformed value falling through to `0` would silently be styled as a dark
+ * garment.
+ */
+export function hexLightness(
+  raw: string | null | undefined
+): number | undefined {
+  const value = raw?.trim()
+  if (!value) {
+    return undefined
+  }
+
+  const body = value.startsWith("#") ? value.slice(1) : value
+  if (!/^[0-9a-fA-F]{3}$|^[0-9a-fA-F]{6}$/.test(body)) {
+    return undefined
+  }
+
+  const full =
+    body.length === 3
+      ? body
+          .split("")
+          .map((c) => c + c)
+          .join("")
+      : body
+
+  const r = parseInt(full.slice(0, 2), 16)
+  const g = parseInt(full.slice(2, 4), 16)
+  const b = parseInt(full.slice(4, 6), 16)
+
+  return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255
+}
+
+/**
+ * What else the model wears, keyed by how light the garment is.
+ *
+ * **A table, not colour theory.** A merchant can read this file and predict
+ * what a new colour will produce, which an inferred palette would not allow.
+ * Tuning it is editing four strings.
+ *
+ * The bands, and why they fall where they do:
+ *
+ * - **`< 0.22` dark** — black, navy, forest. The reference look (Bershka, H&M)
+ *   puts these against light denim and off-white, so the garment stays the
+ *   lightest-contrast object in frame and the artwork keeps its edge.
+ * - **`0.22 – 0.55` mid** — Aqua `#008db5` sits at 0.44, as do heather greys
+ *   and most of the tee's saturated colours. A mid tone reads against either
+ *   extreme, so it gets neutral denim, which is what an actual lookbook does.
+ * - **`> 0.55` light** — white, cream, Oyster `#edcea5` at 0.82. These need a
+ *   darker layer or the model dissolves into the backdrop; every style preset
+ *   here specifies a light or neutral background.
+ *
+ * Two thresholds rather than more: each extra band is another wording an
+ * admin has to hold in their head, and the returned image barely distinguishes
+ * them.
+ */
+const PAIRING_BANDS: ReadonlyArray<{ below: number; wears: string }> = [
+  {
+    below: 0.22,
+    wears: "light washed denim and off-white sneakers",
+  },
+  {
+    below: 0.55,
+    wears: "neutral straight-leg denim and plain white sneakers",
+  },
+  {
+    below: Infinity,
+    wears: "dark charcoal trousers and a deep indigo overshirt",
+  },
+]
+
+/**
+ * Products that get no styling clause, and why each one.
+ *
+ * - **Print media** never reaches this code — a poster is not styled with
+ *   jeans, and its branch returns before pairing is considered.
+ * - **The cap (206)** is worn, so it is not excluded for being unwearable. It
+ *   is excluded because the styling clause exists to dress the model *around*
+ *   the garment carrying the design, and a hat is the accessory to an outfit
+ *   rather than the outfit. Naming trousers next to a cap makes the trousers
+ *   compete with the thing being photographed, and the cap's framing is
+ *   already "head and shoulders" — the trousers are not even in shot.
+ * - **The tote (367)** is carried, not worn. Same reasoning: it is the
+ *   accessory, and "A model carrying a tote, styled with denim" describes an
+ *   outfit the prompt is not otherwise specifying.
+ */
+const NO_PAIRING_PRODUCTS = new Set(["206", "367"])
+
+/**
+ * The styling clause, or nothing.
+ *
+ * Nothing is the answer whenever the base colour is unknown. Choosing a
+ * companion for a colour Printful did not report is the same class of mistake
+ * as guessing the material: it puts an unverified claim into a prompt where
+ * nothing marks it as invented.
+ */
+function pairingClause(design: DesignParameters): string | undefined {
+  if (
+    design.catalogProductId &&
+    NO_PAIRING_PRODUCTS.has(design.catalogProductId)
+  ) {
+    return undefined
+  }
+
+  const lightness = hexLightness(design.colorHex)
+  if (lightness === undefined) {
+    return undefined
+  }
+
+  const band = PAIRING_BANDS.find((b) => lightness < b.below)
+  return band ? `styled with ${band.wears}` : undefined
+}
+
+/**
  * "an Aqua", not "a Aqua". A prompt is read by a language model, and the
  * mismatched article is the tell that a template assembled it.
  */
@@ -260,6 +382,10 @@ export function buildMockupPrompt(input: BuildPromptInput): MockupPrompt {
       design.material ? `made of ${design.material}` : undefined,
       artworkClause,
       technique,
+      // After the technique and before the scene: the outfit is context for
+      // the garment, not a competing subject. Dropped entirely when the base
+      // colour is unknown.
+      pairingClause(design),
       spec.apparel,
       "photorealistic, high detail",
       wear.framing,

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { buildMockupPrompt } from "../src/utils/prompt"
+import { buildMockupPrompt, hexLightness } from "../src/utils/prompt"
 import type { DesignParameters } from "../src/utils/design"
 
 /** The real parameters for the seven products, as the catalog reports them. */
@@ -195,5 +195,98 @@ describe("buildMockupPrompt — placement phrasing follows the product", () => {
   it("still puts a t-shirt's front design on the chest", () => {
     const p = buildMockupPrompt({ design: tee, placement: "front" })
     expect(p.text.toLowerCase()).toContain("on the chest")
+  })
+})
+
+describe("hexLightness", () => {
+  it("reads a six-digit hex", () => {
+    expect(hexLightness("#000000")).toBe(0)
+    // The luma weights are floats and do not sum to exactly 1.
+    expect(hexLightness("#ffffff")).toBeCloseTo(1)
+  })
+
+  it("accepts the short form and a missing hash", () => {
+    // Printful is consistent, but the value passes through variant metadata
+    // that a host app can write to. Both forms are valid CSS hex.
+    expect(hexLightness("#fff")).toBeCloseTo(1)
+    expect(hexLightness("008db5")).toBeCloseTo(
+      hexLightness("#008db5") as number
+    )
+  })
+
+  it("returns undefined rather than throwing on malformed input", () => {
+    // Absence has to stay distinguishable from black. A helper that returned
+    // 0 here would make every unparseable colour a dark garment and hand it
+    // the light-companion pairing, which is a claim nobody verified.
+    expect(hexLightness("")).toBeUndefined()
+    expect(hexLightness("nothing")).toBeUndefined()
+    expect(hexLightness("#ff")).toBeUndefined()
+    expect(hexLightness("#gggggg")).toBeUndefined()
+    expect(hexLightness(undefined)).toBeUndefined()
+  })
+})
+
+describe("buildMockupPrompt — pairing", () => {
+  /** The styling clause, as the prompt introduces it. */
+  const stylingClause = (text: string): string | undefined =>
+    text.split(", ").find((c) => c.startsWith("styled with "))
+
+  it("gives a dark tee light companions", () => {
+    const black: DesignParameters = {
+      ...tee,
+      color: "Black",
+      colorHex: "#000000",
+    }
+    const clause = stylingClause(
+      buildMockupPrompt({ design: black, placement: "front" }).text
+    )
+
+    expect(clause).toBeDefined()
+    // The direction, not the wording. The table is meant to be tuned.
+    expect(clause?.toLowerCase()).toMatch(/light|pale|cream|ecru|white|washed/)
+    expect(clause?.toLowerCase()).not.toMatch(/dark|charcoal|black|deep/)
+  })
+
+  it("gives a light tee darker companions", () => {
+    const oyster: DesignParameters = {
+      ...tee,
+      color: "Oyster",
+      colorHex: "#edcea5",
+    }
+    const clause = stylingClause(
+      buildMockupPrompt({ design: oyster, placement: "front" }).text
+    )
+
+    expect(clause).toBeDefined()
+    expect(clause?.toLowerCase()).toMatch(/dark|charcoal|black|deep|indigo/)
+    expect(clause?.toLowerCase()).not.toMatch(/pale|cream|ecru|off-white/)
+  })
+
+  it("says nothing about styling when the catalog reported no hex", () => {
+    // Same rule as the material: a companion chosen for an unknown base colour
+    // is a guess, and a guess in a prompt becomes an image of a product nobody
+    // verified. The clause is dropped, not defaulted.
+    const noHex: DesignParameters = { ...tee, colorHex: undefined }
+    const p = buildMockupPrompt({ design: noHex, placement: "front" })
+
+    expect(p.text).not.toContain("styled with")
+  })
+
+  it("does not style a poster with clothes", () => {
+    const p = buildMockupPrompt({ design: poster, placement: "default" })
+    expect(p.text).not.toContain("styled with")
+  })
+
+  it("does not style a cap with trousers", () => {
+    // The cap has a hex, so the guard here is the product, not the colour.
+    // The styling clause dresses the model around the garment carrying the
+    // design; a hat is worn *with* an outfit the prompt is not describing.
+    const p = buildMockupPrompt({ design: cap, placement: "embroidery_front" })
+    expect(p.text).not.toContain("styled with")
+  })
+
+  it("does not reintroduce ink onto an embroidered product", () => {
+    const p = buildMockupPrompt({ design: cap, placement: "embroidery_front" })
+    expect(p.text.toLowerCase()).not.toMatch(/\bprinted\b|\bink\b/)
   })
 })
