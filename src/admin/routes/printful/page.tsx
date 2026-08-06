@@ -46,6 +46,39 @@ type Stats = {
   average_fulfillment_time?: { value?: number; relative_difference?: number }
 }
 
+type DesignRow = {
+  product_id: string
+  title: string
+  product_class: string
+  technique?: string
+  techniques: string[]
+  core_placements: string[]
+  placements: string[]
+  brand?: string
+  model?: string
+  material?: string
+  dimensions?: string
+  colors: Array<{ name: string; hex?: string }>
+  sizes: string[]
+}
+
+/**
+ * The class decides what a design even is on this product: ink on fabric,
+ * thread, or a printed sheet. Labelled rather than shown raw, because
+ * "embroidery" on its own reads as a technique rather than a product kind.
+ */
+const CLASS_LABEL: Record<string, string> = {
+  apparel: "Apparel",
+  embroidery: "Embroidered",
+  print_media: "Print media",
+}
+
+const CLASS_COLOUR: Record<string, "green" | "orange" | "blue" | "grey"> = {
+  apparel: "blue",
+  embroidery: "orange",
+  print_media: "green",
+}
+
 const STATUS_COLOUR: Record<string, "green" | "orange" | "red" | "grey"> = {
   success: "green",
   running: "orange",
@@ -84,6 +117,7 @@ const PrintfulPage = () => {
   const [syncs, setSyncs] = useState<SyncRow[]>([])
   const [health, setHealth] = useState<Health | null>(null)
   const [stats, setStats] = useState<Stats | null>(null)
+  const [designs, setDesigns] = useState<DesignRow[]>([])
   const [loading, setLoading] = useState(true)
   const [clearing, setClearing] = useState(false)
 
@@ -91,10 +125,11 @@ const PrintfulPage = () => {
     // Each panel is fetched independently and failures are swallowed per
     // panel: this is the screen an owner opens *because* something is wrong,
     // so one dead endpoint must not blank the other two.
-    const [h, w, s] = await Promise.allSettled([
+    const [h, w, s, d] = await Promise.allSettled([
       fetch("/admin/printful/history", { credentials: "include" }),
       fetch("/admin/printful/health", { credentials: "include" }),
       fetch("/admin/printful/statistics", { credentials: "include" }),
+      fetch("/admin/printful/design", { credentials: "include" }),
     ])
 
     if (h.status === "fulfilled" && h.value.ok) {
@@ -107,6 +142,10 @@ const PrintfulPage = () => {
     if (s.status === "fulfilled" && s.value.ok) {
       const body = await s.value.json()
       setStats(body.statistics?.[0] ?? null)
+    }
+    if (d.status === "fulfilled" && d.value.ok) {
+      const body = await d.value.json()
+      setDesigns(body.designs ?? [])
     }
     setLoading(false)
   }, [])
@@ -261,6 +300,80 @@ const PrintfulPage = () => {
               {health.failed} failed
             </Text>
           </>
+        )}
+      </div>
+
+      <div className="px-6 py-4 flex flex-col gap-3">
+        <Text size="small" weight="plus">
+          Design parameters
+        </Text>
+        {designs.length === 0 ? (
+          <Text size="small" className="text-ui-fg-subtle">
+            {loading
+              ? "Loading…"
+              : "No products carry design parameters yet. Run a sync."}
+          </Text>
+        ) : (
+          designs.map((d) => (
+            <div key={d.product_id} className="flex flex-col gap-1">
+              <div className="flex items-center gap-2">
+                <Text size="small" weight="plus">
+                  {d.title}
+                </Text>
+                <Badge color={CLASS_COLOUR[d.product_class] ?? "grey"}>
+                  {CLASS_LABEL[d.product_class] ?? d.product_class}
+                </Badge>
+              </div>
+
+              <Text size="small" className="text-ui-fg-subtle">
+                {/* Technique first: it is what decides whether a design is ink
+                    or thread, and a prompt that gets it wrong describes the
+                    wrong object entirely. */}
+                {d.technique ?? "—"}
+                {d.brand ? ` · ${d.brand}${d.model ? ` ${d.model}` : ""}` : ""}
+                {d.material ? ` · ${d.material}` : ""}
+              </Text>
+
+              <Text size="small" className="text-ui-fg-subtle">
+                Design goes on: {d.core_placements.join(", ") || "—"}
+                {d.placements.length > d.core_placements.length
+                  ? ` (${d.placements.length - d.core_placements.length} more available)`
+                  : ""}
+              </Text>
+
+              {d.colors.length > 0 && (
+                <div className="flex items-center gap-1 flex-wrap">
+                  <Text size="small" className="text-ui-fg-subtle">
+                    Base colours:
+                  </Text>
+                  {d.colors.slice(0, 12).map((c) => (
+                    <span
+                      key={c.name}
+                      title={`${c.name}${c.hex ? ` ${c.hex}` : ""}`}
+                      className="inline-block h-4 w-4 rounded border border-ui-border-base"
+                      // Only a real hex paints a swatch. A missing one would
+                      // otherwise render as black and claim a colour Printful
+                      // never reported.
+                      style={c.hex ? { backgroundColor: c.hex } : undefined}
+                    />
+                  ))}
+                  {d.colors.length > 12 && (
+                    <Text size="small" className="text-ui-fg-subtle">
+                      +{d.colors.length - 12}
+                    </Text>
+                  )}
+                </div>
+              )}
+
+              {d.sizes.length > 0 && (
+                <Text size="small" className="text-ui-fg-subtle">
+                  {d.product_class === "print_media" ? "Sizes" : "Sizes"}:{" "}
+                  {d.sizes.slice(0, 8).join(", ")}
+                  {d.sizes.length > 8 ? ` +${d.sizes.length - 8}` : ""}
+                </Text>
+              )}
+            </div>
+          ))
         )}
       </div>
 

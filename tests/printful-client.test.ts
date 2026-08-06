@@ -510,3 +510,86 @@ describe("getStatistics", () => {
     expect(stats).toEqual([])
   })
 })
+
+describe("getCatalogVariant", () => {
+  const payload = {
+    code: 200,
+    result: {
+      variant: {
+        id: 4025,
+        product_id: 71,
+        color: "Aqua",
+        color_code: "#008db5",
+        size: "2XL",
+        material: [{ name: "combed ring spun cotton", percentage: 100 }],
+      },
+      product: {
+        id: 71,
+        title: "Unisex Staple T-Shirt | Bella + Canvas 3001",
+        brand: "Bella + Canvas",
+        model: "3001",
+        techniques: [{ key: "DTG", is_default: true }],
+        files: [
+          { id: "default", type: "front", title: "Front print" },
+          { id: "back", type: "back", title: "Back print" },
+        ],
+      },
+    },
+  }
+
+  it("reads a variant with its colour, material and techniques", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(payload), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })
+    )
+
+    const client = new PrintfulClient({
+      apiToken: "t",
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      maxRetries: 0,
+    })
+
+    const got = await client.getCatalogVariant(4025)
+
+    expect(String(fetchImpl.mock.calls[0][0])).toContain(
+      "/products/variant/4025"
+    )
+    expect(got?.variant.color_code).toBe("#008db5")
+    expect(got?.product.techniques?.[0]?.key).toBe("DTG")
+    expect(got?.variant.material?.[0]?.name).toBe("combed ring spun cotton")
+  })
+
+  it("returns null rather than throwing when the catalog cannot answer", async () => {
+    // This runs inside the sync. A catalog hiccup must not fail an import that
+    // is otherwise fine — design parameters are an enrichment, not a
+    // precondition for selling the product.
+    const fetchImpl = vi.fn().mockRejectedValue(new Error("ETIMEDOUT"))
+
+    const client = new PrintfulClient({
+      apiToken: "t",
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      maxRetries: 0,
+    })
+
+    await expect(client.getCatalogVariant(4025)).resolves.toBeNull()
+  })
+
+  it("returns null for a variant the catalog does not know", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ code: 404, result: "Not Found" }), {
+        status: 404,
+        headers: { "content-type": "application/json" },
+      })
+    )
+
+    const client = new PrintfulClient({
+      apiToken: "t",
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      maxRetries: 0,
+    })
+
+    await expect(client.getCatalogVariant(999999)).resolves.toBeNull()
+  })
+})

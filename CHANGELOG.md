@@ -1,5 +1,56 @@
 # Changelog
 
+## 0.9.0
+
+Design parameters: what a design becomes on each product.
+
+### Added
+
+- **A design panel on the Printful admin page.** Per product: what class it is,
+  the technique that makes the design, where the design goes, base colour
+  swatches with their hex, and sizes.
+- **Design parameters stamped on every variant during sync**, read from
+  `GET /products/variant/{id}` — public, no token needed. Colour and its hex,
+  material with percentages, brand and model, techniques and placements.
+- **`GET /admin/printful/design`** — a pure database read; the sync already
+  paid for the catalog lookups.
+
+### The three product classes
+
+Derived from techniques and placements rather than a list of catalog ids, so
+the eighth product a store adds is classified rather than misfiled:
+
+| Class       | What it means                                                                             |
+| ----------- | ----------------------------------------------------------------------------------------- |
+| Apparel     | ink on fabric; base colour and material drive how the design reads                        |
+| Embroidery  | **thread, not ink** — a cap supporting only EMBROIDERY must never be described as printed |
+| Print media | paper and vinyl; physical size matters, base colour does not exist                        |
+
+### Details that would otherwise mislead
+
+- **A colour appears once**, though a tee reports it nine times — once per size.
+- **A colour whose hex Printful never sent renders as absent, not black.** An
+  invented hex is a claim about the garment.
+- **A product no sync has enriched is omitted rather than shown empty.** "Never
+  asked" and "nothing to show" are different states, and rendering them alike
+  tells the owner something false about a product that is fine.
+- **The catalog is read once per colour, not once per variant.** A tee with 84
+  colours across 9 sizes costs 84 calls rather than 756; a 33-size colourless
+  poster costs 1. Product-level facts are identical across variants, and the
+  hex is identical across the sizes of a colour.
+
+### Known limits
+
+- **No print area geometry.** Pixel dimensions and DPI live in
+  `/mockup-generator/printfiles/{id}` and `/templates/{id}`, both of which
+  require a token and whose response schemas Printful does not publish. The
+  panel is therefore qualitative — it says _where_ a design goes, not how large
+  the printable region is. Tracked in #11.
+- **A variant with no catalog variant id gets no design parameters.** Printful
+  leaves `variant_id` null on manually-created sync variants and warehouse
+  items. Such a variant imports and sells normally; only the design panel is
+  quieter.
+
 ## 0.8.2
 
 A dedicated Printful page in the admin, and a way out of a stuck sync.

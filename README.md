@@ -97,6 +97,7 @@ See `examples/basic-store/` for a fuller snippet.
 | Fulfillment provider | Select Printful shipping option in Admin locations                                        |
 | Status               | `GET /admin/printful/status` + product list widget                                        |
 | Admin page           | **Printful** in the sidebar: sales, sync history, webhook health, stuck-sync recovery     |
+| Design parameters    | Per product: class, technique, where the design goes, base colours with hex               |
 | Shipment tracking    | Printful webhooks → Medusa fulfillment + shipment per parcel, with tracking               |
 | Order visibility     | Printful status and per-parcel tracking on the Admin order page                           |
 
@@ -349,6 +350,33 @@ message, never a killed sync.
 
 A run cleared by a person is recorded as `cleared_by_operator` with how long it
 had been silent, so it is never confused with one the timeout reaped.
+
+## Design parameters
+
+Each synced variant carries what the design becomes on that product, read from
+Printful's public catalog during sync. The admin page shows it per product.
+
+Products fall into three classes, derived from their techniques and placements
+rather than a hardcoded list — so a product you add later is classified rather
+than misfiled:
+
+| Class           | What it means for a design                                                                  |
+| --------------- | ------------------------------------------------------------------------------------------- |
+| **Apparel**     | Ink on fabric. Base colour and material drive how the design reads.                         |
+| **Embroidery**  | **Thread, not ink.** A cap supporting only `EMBROIDERY` must never be described as printed. |
+| **Print media** | Paper and vinyl. Physical size matters; there is no base colour.                            |
+
+The class matters more than it looks. A dad hat and a t-shirt are both "apparel"
+in a catalogue sense, but a design on one is stitched and on the other is
+printed — and its placement is `embroidery_front` rather than `front`, so
+anything filtering for front-and-back drops it silently.
+
+Parameters live in variant metadata under `printful_design`, and the panel is
+built from them without calling Printful.
+
+**What it does not show:** print area dimensions and DPI. Those need an
+authenticated endpoint whose response schema Printful does not publish, so the
+panel says _where_ a design goes rather than how large the printable region is.
 
 ## Admin usage
 
