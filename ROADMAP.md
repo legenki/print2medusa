@@ -13,9 +13,9 @@ fixed is recorded in `CHANGELOG.md` rather than quietly amended.
 
 |                   |                                                                      |
 | ----------------- | -------------------------------------------------------------------- |
-| Published version | `0.8.2`                                                              |
+| Published version | `0.9.0`                                                              |
 | Tests             | unit (`npm test`) + integration (`test:integration`, needs Postgres) |
-| Printful API used | store products, orders, shipping rates, webhooks, reports            |
+| Printful API used | store products, catalog, orders, shipping rates, webhooks, reports   |
 | Peer range        | `@medusajs/*` `^2.18.0`                                              |
 
 The plugin covers products, orders, order cancellation, webhook configuration,
@@ -299,8 +299,11 @@ different treatment:
 | Embroidery  | dad hat — **no DTG at all**    | thread, and its placement is `embroidery_front` |
 | Print media | posters (33 sizes), stickers   | physical size; no base colour exists            |
 
-- **[0.9.0](https://github.com/legenki/print2medusa/issues/8)** — design
-  parameters on the admin page: technique, placements, colour swatch, size
+- **[0.9.0](https://github.com/legenki/print2medusa/issues/8)** `shipped` —
+  design parameters on the admin page: class, technique, placements, colour
+  swatches with hex, sizes. The catalog is read once per colour rather than
+  once per variant, so a tee with 84 colours across 9 sizes costs 84 calls
+  rather than 756
 - **[0.9.1](https://github.com/legenki/print2medusa/issues/9)** — mockup prompt
   generator. Prompts only; image generation stays outside the plugin, so no API
   keys, quotas or file storage enter this repo
