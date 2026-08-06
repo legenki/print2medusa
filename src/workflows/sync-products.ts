@@ -27,6 +27,7 @@ import {
   shouldRunRemovalPass,
   type OnRemovedFromPrintful,
 } from "../utils/removed"
+import { CatalogVariantCache, enrichVariantsWithDesign } from "../utils/design"
 
 export type SyncProductsInput = {
   /** The claimed sync log. The workflow never claims — the route already did. */
@@ -83,6 +84,13 @@ const syncProductsStep = createStep(
     // thing the compensation may delete.
     const orphans = new OrphanTracker()
 
+    // One cache for the whole run, not one per product, so a blank two
+    // products share costs a single call across the catalogue. Inside a
+    // product it is what keeps a 756-variant tee at 84 calls instead of 756.
+    const catalogCache = new CatalogVariantCache((id) =>
+      client.getCatalogVariant(id)
+    )
+
     let processed = 0
     await printful.heartbeatSyncLog(input.sync_log_id, {
       products_total: toProcess.length,
@@ -111,6 +119,21 @@ const syncProductsStep = createStep(
         // is optional, so omitting one is legal TypeScript and typecheck stayed
         // green while the option did nothing. The mapper narrows internally.
         const mapped = mapSyncProductToMedusa(detail, options)
+
+        // Design parameters, best-effort. Mutating `mapped.variants` in place
+        // means both the create and the update path below pick them up from
+        // the one object, so the two paths cannot drift apart. Every failure
+        // mode inside — a null answer, a missing catalog id, a throw — returns
+        // the variant untouched, so this can only ever add metadata.
+        mapped.variants = await enrichVariantsWithDesign(
+          mapped.variants,
+          detail.sync_variants,
+          {
+            syncProductId: String(summary.id),
+            getCatalogVariant: (id) => client.getCatalogVariant(id),
+            cache: catalogCache,
+          }
+        )
 
         const existingLink = await printful.findProductLink(String(summary.id))
 
@@ -397,6 +420,12 @@ const syncProductsStep = createStep(
         }
       }
     }
+
+    // The number to watch. If this ever approaches the variant count rather
+    // than the distinct product-and-colour count, the probe key has regressed.
+    logger.info(
+      `Printful sync: ${catalogCache.calls} catalog variant call(s) for design parameters`
+    )
 
     return new StepResponse(counters, { orphanProductIds: orphans.toDelete() })
   },
