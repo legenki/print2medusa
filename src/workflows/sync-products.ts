@@ -28,6 +28,7 @@ import {
   type OnRemovedFromPrintful,
 } from "../utils/removed"
 import { CatalogVariantCache, enrichVariantsWithDesign } from "../utils/design"
+import { planBundlePass, type ProductForBundlePass } from "../utils/bundle"
 
 export type SyncProductsInput = {
   /** The claimed sync log. The workflow never claims — the route already did. */
@@ -418,6 +419,65 @@ const syncProductsStep = createStep(
           counters.errors.push(`Removal pass failed: ${message}`)
           logger.error(`Printful sync removal pass failed: ${message}`)
         }
+      }
+    }
+
+    // Bundles. They have no Printful product of their own, so the loop above
+    // never reaches them: nothing in `summaries` names a bundle. Without this
+    // pass a bundle stays on sale after a member sells out, and every order
+    // containing it fails at Printful.
+    //
+    // Only after a full pass, for the same reason the removal pass is gated: a
+    // `limit` leaves most members unrefreshed, and deciding availability from
+    // stale metadata would draft bundles on last week's stock.
+    if (!input.limit) {
+      try {
+        const products = await productModule.listProducts(
+          {},
+          { take: 100_000, relations: ["variants"] }
+        )
+
+        const variantsById = new Map(
+          products.flatMap((p) =>
+            (p.variants ?? []).map((v) => [
+              v.id,
+              { metadata: v.metadata as Record<string, unknown> | null },
+            ])
+          )
+        )
+
+        const writes = planBundlePass({
+          bundles: products as ProductForBundlePass[],
+          variantsById,
+        })
+
+        for (const write of writes) {
+          try {
+            await productModule.updateProducts(write.product_id, {
+              status: write.status,
+              metadata: write.metadata,
+            })
+            counters.updated += 1
+            logger.info(
+              `Printful sync: bundle ${write.product_id} → ${write.status}` +
+                (write.missing.length
+                  ? ` (unavailable: ${write.missing.join(", ")})`
+                  : "")
+            )
+          } catch (err) {
+            counters.failed += 1
+            const message = err instanceof Error ? err.message : String(err)
+            counters.errors.push(`Bundle ${write.product_id}: ${message}`)
+          }
+        }
+      } catch (err) {
+        // Isolated like the removal pass: bundles are a small part of the
+        // catalogue, and failing to reconcile them must not fail a sync that
+        // otherwise imported every product correctly.
+        counters.failed += 1
+        const message = err instanceof Error ? err.message : String(err)
+        counters.errors.push(`Bundle pass failed: ${message}`)
+        logger.error(`Printful sync bundle pass failed: ${message}`)
       }
     }
 

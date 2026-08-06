@@ -6,7 +6,10 @@ import {
   isBundleLine,
   medusaLineIdFor,
   planBundleAvailability,
+  planBundlePass,
+  planBundlePublication,
 } from "../src/utils/bundle"
+import { STOCK_MARKER_KEY } from "../src/utils/stock"
 
 /** A bundle line as it looks on an order: members captured at purchase. */
 const bundleLine = {
@@ -155,6 +158,165 @@ describe("medusaLineIdFor", () => {
     // merchant-controlled. Splitting on the last separator would attribute the
     // parcel to a line id that does not exist.
     expect(medusaLineIdFor("item_bundle::var::odd")).toBe("item_bundle")
+  })
+})
+
+describe("planBundlePublication", () => {
+  const member = (status: string) => ({
+    metadata: { printful_availability_status: status },
+  })
+
+  it("drafts a bundle whose member sold out, and marks it as ours", () => {
+    const out = planBundlePublication({
+      members: [member("active"), member("out_of_stock")],
+      currentStatus: "published",
+      currentMetadata: {},
+    })
+
+    expect(out.status).toBe("draft")
+    expect(out.changed).toBe(true)
+    expect(out.metadata[STOCK_MARKER_KEY]).toBe("unavailable")
+  })
+
+  it("republishes once the member is back, clearing the marker", () => {
+    const out = planBundlePublication({
+      members: [member("active")],
+      currentStatus: "draft",
+      currentMetadata: { [STOCK_MARKER_KEY]: "unavailable" },
+    })
+
+    expect(out.status).toBe("published")
+    expect(out.metadata[STOCK_MARKER_KEY]).toBeUndefined()
+  })
+
+  it("leaves a draft the merchant made alone", () => {
+    // No marker means we did not draft it. Republishing here would undo the
+    // merchant's own decision on every sync.
+    const out = planBundlePublication({
+      members: [member("active")],
+      currentStatus: "draft",
+      currentMetadata: {},
+    })
+
+    expect(out.status).toBe("draft")
+    expect(out.changed).toBe(false)
+  })
+
+  it("drafts on one sold-out member, unlike a plain product", () => {
+    // planStockActions drafts only when *every* variant is gone. A bundle is a
+    // promise to ship all of it, so one missing member breaks the promise even
+    // though the rest are in stock.
+    const out = planBundlePublication({
+      members: [member("active"), member("active"), member("discontinued")],
+      currentStatus: "published",
+      currentMetadata: {},
+    })
+
+    expect(out.status).toBe("draft")
+  })
+
+  it("does not touch a bundle with no members recorded", () => {
+    // An empty member list is a bundle not yet configured, not a sellout.
+    // Drafting it would hide a product the merchant is still building.
+    const out = planBundlePublication({
+      members: [],
+      currentStatus: "published",
+      currentMetadata: {},
+    })
+
+    expect(out.status).toBe("published")
+    expect(out.changed).toBe(false)
+  })
+})
+
+describe("planBundlePass", () => {
+  const variants = (statuses: Record<string, string>) =>
+    new Map(
+      Object.entries(statuses).map(([id, status]) => [
+        id,
+        { metadata: { printful_availability_status: status } },
+      ])
+    )
+
+  const bundleProduct = (status: string, members: string[]) => ({
+    id: "prod_bundle",
+    status,
+    metadata: {},
+    variants: [
+      {
+        id: "var_bundle",
+        metadata: {
+          [BUNDLE_MEMBERS_KEY]: members.map((variant_id) => ({ variant_id })),
+        },
+      },
+    ],
+  })
+
+  it("drafts a bundle whose member sold out, naming the member", () => {
+    // Bundles have no Printful product, so the per-product sync loop never
+    // reaches them. Without this pass a bundle stays on sale after a member
+    // sells out and every such order fails at Printful.
+    const writes = planBundlePass({
+      bundles: [bundleProduct("published", ["var_tee", "var_hat"])],
+      variantsById: variants({ var_tee: "active", var_hat: "out_of_stock" }),
+    })
+
+    expect(writes).toHaveLength(1)
+    expect(writes[0].status).toBe("draft")
+    expect(writes[0].missing).toEqual(["var_hat"])
+  })
+
+  it("writes nothing when no bundle changed", () => {
+    // A sync over an unchanged catalogue must issue no product updates.
+    const writes = planBundlePass({
+      bundles: [bundleProduct("published", ["var_tee"])],
+      variantsById: variants({ var_tee: "active" }),
+    })
+
+    expect(writes).toEqual([])
+  })
+
+  it("ignores a product that is not a bundle", () => {
+    const writes = planBundlePass({
+      bundles: [
+        {
+          id: "prod_tee",
+          status: "published",
+          variants: [{ id: "v", metadata: {} }],
+        },
+      ],
+      variantsById: variants({}),
+    })
+
+    expect(writes).toEqual([])
+  })
+
+  it("does not republish a bundle when no member could be loaded", () => {
+    // Knowing nothing about the members is not evidence they are back in
+    // stock. Republishing here would put a bundle back on sale on the strength
+    // of a failed lookup.
+    const writes = planBundlePass({
+      bundles: [
+        {
+          ...bundleProduct("draft", ["var_tee", "var_hat"]),
+          metadata: { [STOCK_MARKER_KEY]: "unavailable" },
+        },
+      ],
+      variantsById: variants({}),
+    })
+
+    expect(writes).toEqual([])
+  })
+
+  it("does not draft a bundle whose member could not be loaded", () => {
+    // A missing lookup is not evidence Printful ran out of anything. Counting
+    // it as sold out would hide a live bundle on a transient failure.
+    const writes = planBundlePass({
+      bundles: [bundleProduct("published", ["var_tee", "var_gone"])],
+      variantsById: variants({ var_tee: "active" }),
+    })
+
+    expect(writes).toEqual([])
   })
 })
 

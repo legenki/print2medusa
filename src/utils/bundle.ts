@@ -12,6 +12,15 @@
  * skipped as `no_printful_items` and nothing ships.
  */
 
+import { resolvePublication, type PublicationResult } from "./stock"
+
+/** Statuses meaning a variant cannot be ordered. Mirrors `stock.ts`. */
+const UNAVAILABLE = new Set([
+  "out_of_stock",
+  "temporary_out_of_stock",
+  "discontinued",
+])
+
 /** Where a bundle's composition lives, on the variant and on the order line. */
 export const BUNDLE_MEMBERS_KEY = "printful_bundle_members"
 
@@ -151,17 +160,142 @@ export function medusaLineIdFor(externalId: string): string {
   return at === -1 ? externalId : externalId.slice(0, at)
 }
 
-/** Statuses meaning a variant cannot be ordered. Mirrors `stock.ts`. */
-const UNAVAILABLE = new Set([
-  "out_of_stock",
-  "temporary_out_of_stock",
-  "discontinued",
-])
+/** A Medusa product as the bundle pass needs to see it. */
+export type ProductForBundlePass = {
+  id: string
+  status: string
+  metadata?: Record<string, unknown> | null
+  variants?: Array<{
+    id: string
+    metadata?: Record<string, unknown> | null
+  }> | null
+}
+
+export type BundleProductWrite = {
+  product_id: string
+  status: "published" | "draft"
+  metadata: Record<string, unknown>
+  /** Member variant ids that are unavailable, for the log and the admin. */
+  missing: string[]
+}
+
+/**
+ * Which bundle products the sync should rewrite, and to what.
+ *
+ * Bundles are invisible to the ordinary sync: they have no Printful product of
+ * their own, so no `sync_product` ever names them and the per-product loop
+ * never reaches them. Without this pass a bundle stays on sale after a member
+ * sells out, and every such order fails at Printful.
+ *
+ * Availability is read from the member variants passed in, not from the bundle
+ * — the bundle variant has no Printful status of its own to read.
+ *
+ * Returns only products that need writing, so a sync over a catalogue with no
+ * bundle changes issues no updates at all.
+ */
+export function planBundlePass(input: {
+  bundles: ProductForBundlePass[]
+  /** Availability metadata by variant id, for every member variant. */
+  variantsById: Map<string, { metadata?: Record<string, unknown> | null }>
+}): BundleProductWrite[] {
+  const writes: BundleProductWrite[] = []
+
+  for (const bundle of input.bundles) {
+    const memberIds = (bundle.variants ?? []).flatMap((v) =>
+      bundleMembersOf({ id: v.id, quantity: 1, metadata: v.metadata }).map(
+        (m) => m.variant_id
+      )
+    )
+    if (memberIds.length === 0) {
+      continue
+    }
+
+    // A member variant the sync could not load is left out of the decision
+    // rather than counted as sold out: a failed lookup is not evidence that
+    // Printful ran out of anything, and drafting on it would hide a live
+    // bundle on a transient error.
+    const known = memberIds
+      .map((id) => input.variantsById.get(id))
+      .filter((v): v is { metadata?: Record<string, unknown> | null } => !!v)
+
+    // Knowing nothing about any member is not the same as knowing they are all
+    // in stock. Left to fall through, a bundle drafted for a sellout would be
+    // republished on the strength of a lookup that simply failed.
+    if (known.length === 0) {
+      continue
+    }
+
+    const plan = planBundlePublication({
+      members: known,
+      currentStatus: bundle.status === "published" ? "published" : "draft",
+      currentMetadata: (bundle.metadata ?? {}) as Record<string, unknown>,
+    })
+
+    if (!plan.changed) {
+      continue
+    }
+
+    writes.push({
+      product_id: bundle.id,
+      status: plan.status,
+      metadata: plan.metadata,
+      missing: memberIds.filter((id) => {
+        const status =
+          input.variantsById.get(id)?.metadata?.printful_availability_status
+        return typeof status === "string" && UNAVAILABLE.has(status)
+      }),
+    })
+  }
+
+  return writes
+}
 
 export type BundleAvailability = {
   available: boolean
   memberCount: number
   unavailableCount: number
+}
+
+/**
+ * Whether a bundle should be published, from the stock of its members.
+ *
+ * Reuses `resolvePublication` so a bundle obeys the same ownership rule as
+ * every other product: the plugin undoes only unpublishes it performed, and a
+ * draft the merchant made themselves is left alone however available Printful
+ * says the members are.
+ *
+ * What differs is the threshold. `planStockActions` drafts a product only when
+ * *every* variant is gone, because any remaining variant is still sellable. A
+ * bundle is a promise to ship all of it, so one missing member already breaks
+ * the promise.
+ *
+ * A bundle with no members recorded is left untouched — that is a bundle the
+ * merchant has not finished configuring, not one that sold out.
+ */
+export function planBundlePublication(input: {
+  members: Array<{ metadata?: Record<string, unknown> | null } | null>
+  currentStatus: "published" | "draft"
+  currentMetadata: Record<string, unknown>
+}): PublicationResult {
+  const availability = planBundleAvailability(
+    input.members.map((m) => m?.metadata ?? {})
+  )
+
+  // One missing member is enough. A bundle with no members recorded has no
+  // unavailable ones either, so it falls through as available — an
+  // unconfigured bundle is not a sold-out one.
+  const allUnavailable = availability.unavailableCount > 0
+
+  return resolvePublication({
+    plan: {
+      allUnavailable,
+      status: allUnavailable ? "draft" : "published",
+      hasDiscontinued: false,
+      variantAvailability: {},
+    },
+    currentStatus: input.currentStatus,
+    currentMetadata: input.currentMetadata,
+  })
 }
 
 /**
