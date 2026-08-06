@@ -15,6 +15,7 @@ import type {
 import { resolveStateCode } from "../utils/mappers"
 import { planCreatedOrderMetadata } from "../utils/costs"
 import { shippingOverrideFor } from "../utils/shipping-rates"
+import { expandOrderLines } from "../utils/bundle"
 
 export type CreatePrintfulOrderInput = {
   order_id: string
@@ -60,7 +61,26 @@ const createPrintfulOrderStep = createStep(
     const items: PrintfulOrderItemInput[] = []
     const unresolved: string[] = []
 
-    for (const item of order.items ?? []) {
+    // A bundle is one Medusa line standing for several Printful products, and
+    // the loop below resolves one line to one item. Left unexpanded, a
+    // three-item bundle would ship a single thing — or, since a bundle variant
+    // has no Printful link of its own, be skipped as `no_printful_items` and
+    // ship nothing at all.
+    //
+    // Composition comes from each line's own metadata, written when the
+    // customer bought. A merchant editing the bundle afterwards must not
+    // change what an already-placed order ships.
+    const lines = expandOrderLines(
+      (order.items ?? []).map((item) => ({
+        id: item.id,
+        variant_id: item.variant_id,
+        title: item.title,
+        quantity: Number(item.quantity),
+        metadata: (item.metadata ?? {}) as Record<string, unknown>,
+      }))
+    )
+
+    for (const item of lines) {
       const variantId = item.variant_id
       if (!variantId) {
         unresolved.push(item.id)
@@ -87,7 +107,7 @@ const createPrintfulOrderStep = createStep(
       items.push({
         sync_variant_id: Number(syncVariantId),
         quantity: Number(item.quantity),
-        name: item.title,
+        name: item.title ?? undefined,
         external_id: item.id,
       })
     }

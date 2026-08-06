@@ -16,6 +16,7 @@ import {
   nextRetryDelayMs,
 } from "../modules/printful/service"
 import { planOrderStateActions } from "../utils/order-state"
+import { medusaLineIdFor } from "../utils/bundle"
 
 export type ApplyOrderStatusInput = {
   /** Row id in printful_webhook_event. */
@@ -158,10 +159,20 @@ const applyStep = createStep(
         // line item id. create-printful-order.ts stamps external_id with the
         // Medusa line item id on every item it sends, so this map joins a parcel's
         // contents back to Medusa line items.
+        //
+        // Bundle members carry a synthetic external_id instead, since several
+        // items descend from one Medusa line and Printful needs them distinct.
+        // `medusaLineIdFor` resolves those back to the bundle line the customer
+        // actually bought — the only line Medusa can fulfil. Taking the id
+        // verbatim would match no line, clamp every parcel to zero, and leave
+        // the order permanently unshipped.
         const printfulItemToMedusaItem = new Map<number, string>()
         for (const pfItem of pfOrder.items ?? []) {
           if (pfItem.external_id) {
-            printfulItemToMedusaItem.set(Number(pfItem.id), pfItem.external_id)
+            printfulItemToMedusaItem.set(
+              Number(pfItem.id),
+              medusaLineIdFor(pfItem.external_id)
+            )
           }
         }
 
@@ -198,16 +209,19 @@ const applyStep = createStep(
                     : []
                 })
 
-          const clamped: Array<{ id: string; quantity: number }> = []
+          // Merged by line id: several bundle members in one parcel all resolve
+          // to the same Medusa line, and two entries for one line in a single
+          // fulfillment is not something Medusa expects.
+          const clamped = new Map<string, number>()
           for (const req of requested) {
             const open = remaining.get(req.id) ?? 0
             const quantity = Math.min(req.quantity, open)
             if (quantity > 0) {
-              clamped.push({ id: req.id, quantity })
+              clamped.set(req.id, (clamped.get(req.id) ?? 0) + quantity)
               remaining.set(req.id, open - quantity)
             }
           }
-          return clamped
+          return [...clamped].map(([id, quantity]) => ({ id, quantity }))
         }
 
         let created = 0

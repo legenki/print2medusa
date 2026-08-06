@@ -1,5 +1,69 @@
 # Changelog
 
+## 0.9.2
+
+Merch bundles: one Medusa product that ships as several Printful ones.
+
+### Added
+
+- **Bundles as ordinary Medusa products.** A variant becomes a bundle by
+  carrying `printful_bundle_members` in its metadata — a list of member
+  variant ids and quantities. It gets its own page, price and images, and no
+  new table.
+- **Order expansion.** A bundle line is replaced by its members before the
+  order reaches Printful.
+- **A stock pass over bundles** during a full sync, so a bundle goes off sale
+  when a member sells out and comes back when it returns.
+- **A "Bundles" panel** on the Printful admin page, and
+  **`GET /admin/printful/bundles`**.
+
+### Configuring one
+
+```jsonc
+// on the bundle product's variant metadata
+{
+  "printful_bundle_members": [
+    { "variant_id": "variant_01J...", "quantity": 1 },
+    { "variant_id": "variant_01K...", "quantity": 2 },
+  ],
+}
+```
+
+### Why expansion is not optional
+
+`create-printful-order` resolves one order line to one Printful item via
+`variant_id`. A bundle left unexpanded ships one thing where the customer
+bought three — and since a bundle variant has no Printful link of its own, the
+order is skipped as `no_printful_items` and nothing ships at all.
+
+Composition is read from the order line's own metadata, captured at purchase.
+Editing a bundle after a sale does not change what an already-placed order
+ships.
+
+### A bundle is stricter about stock than a product
+
+`planStockActions` drafts a product only when _every_ variant is gone, because
+any remaining variant is still sellable. A bundle is a promise to ship all of
+it, so one missing member already breaks the promise.
+
+Publication goes through the same `resolvePublication` as everything else: the
+plugin undoes only unpublishes it performed, and a draft you made yourself is
+left alone.
+
+### Known limits
+
+- **Bundles are reconciled only on a full sync.** Under a `limit` most members
+  go unrefreshed, and deciding availability from stale metadata would draft
+  bundles on last week's stock.
+- **A member the sync cannot load is treated as unknown, not gone.** If no
+  member resolves at all, the pass writes nothing — republishing on the
+  strength of a failed lookup would put a sold-out bundle back on sale.
+- **Fulfillment is recorded against the bundle line, not per member.** Medusa
+  has one line to fulfil, so a parcel holding two members counts once against
+  it. Printful's per-item detail is preserved in the item `external_id`.
+- **Bundle members are not checked at checkout.** A member that sells out
+  between the last sync and the order still reaches Printful and fails there.
+
 ## 0.9.1
 
 Mockup prompts, built from what Printful actually says about the product.

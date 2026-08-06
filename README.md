@@ -99,6 +99,7 @@ See `examples/basic-store/` for a fuller snippet.
 | Admin page           | **Printful** in the sidebar: sales, sync history, webhook health, stuck-sync recovery     |
 | Design parameters    | Per product: class, technique, where the design goes, base colours with hex               |
 | Mockup prompts       | Paste-ready prompts per product and colour, in three shapes for the three product classes |
+| Merch bundles        | One Medusa product that expands into several Printful items when the order is placed      |
 | Shipment tracking    | Printful webhooks → Medusa fulfillment + shipment per parcel, with tracking               |
 | Order visibility     | Printful status and per-parcel tracking on the Admin order page                           |
 
@@ -406,6 +407,39 @@ would produce five near-identical images.
 **Nothing is invented.** A clause is dropped rather than defaulted when Printful
 did not report the fact: the cap has no material in the catalog, so its prompt
 says nothing about fabric.
+
+## Merch bundles
+
+A bundle is an ordinary Medusa product — its own page, price and images — whose
+variant records which member variants it contains:
+
+```jsonc
+// on the bundle variant's metadata
+{
+  "printful_bundle_members": [
+    { "variant_id": "variant_01J...", "quantity": 1 },
+    { "variant_id": "variant_01K...", "quantity": 2 },
+  ],
+}
+```
+
+Printful has no notion of a bundle; it fulfils individual items. So when the
+order is placed the bundle line is **replaced by its members**, with each
+member's quantity multiplied by how many bundles were bought. Two bundles each
+holding two stickers order four stickers.
+
+Composition is read from the order line, captured at purchase. Editing a bundle
+after a sale does not change what an already-placed order ships.
+
+**A bundle is stricter about stock than a plain product.** A product is drafted
+only when every variant is gone, since any remaining variant is still sellable.
+A bundle promises to ship all of it, so one sold-out member takes it off sale —
+and puts it back when the member returns. Only a full sync reconciles bundles:
+under a `limit` most members go unrefreshed, and stale metadata would draft
+bundles on last week's stock.
+
+The **Bundles** panel on the Printful admin page lists each bundle, its members,
+and which member is unavailable when one is.
 
 ## Admin usage
 
