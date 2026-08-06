@@ -404,3 +404,54 @@ describe("planDesignParameters", () => {
     expect(planDesignParameters(noMaterial)?.material).toBeUndefined()
   })
 })
+
+describe("placement ids as Printful actually shapes them", () => {
+  // Printful names the primary placement `id: "default"` on every product and
+  // puts the meaning in `type`. These fixtures are the real payloads from
+  // catalog variants 4025 and 7853, trimmed — reading `id` instead of `type`
+  // collapses every product's main placement to "default", which matches
+  // nothing and left the cap with no placement at all.
+  const tee = {
+    variant: { id: 4025, color: "Aqua", color_code: "#008db5" },
+    product: {
+      id: 71,
+      techniques: [{ key: "DTG", is_default: true }],
+      files: [
+        { id: "embroidery_chest_left", type: "embroidery_chest_left" },
+        { id: "default", type: "front" },
+        { id: "back", type: "back" },
+        { id: "front_dtf", type: "front_dtf" },
+      ],
+    },
+  } as never
+
+  const cap = {
+    variant: { id: 7853, color: "Black", color_code: "#000000" },
+    product: {
+      id: 206,
+      techniques: [{ key: "EMBROIDERY", is_default: true }, { key: "DTFILM" }],
+      files: [
+        { id: "default", type: "embroidery_front" },
+        { id: "back", type: "embroidery_back" },
+        { id: "front_dtf_hat", type: "front_dtf_hat" },
+      ],
+    },
+  } as never
+
+  it("finds front on a tee whose front placement is called default", () => {
+    expect(corePlacementsFor(tee)).toEqual(["front", "back"])
+  })
+
+  it("finds the cap's only placement, which is also called default", () => {
+    // The regression that matters: an empty list here means the admin shows a
+    // product with nowhere to put a design, and a prompt has no placement to
+    // name.
+    expect(corePlacementsFor(cap)).toEqual(["embroidery_front"])
+    expect(corePlacementsFor(cap)).not.toEqual([])
+  })
+
+  it("still classifies both correctly from the real payloads", () => {
+    expect(classifyProduct(tee)).toBe("apparel")
+    expect(classifyProduct(cap)).toBe("embroidery")
+  })
+})

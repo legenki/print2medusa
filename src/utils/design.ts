@@ -144,7 +144,13 @@ export function placementsFor(
   const out: string[] = []
 
   for (const f of variant?.product?.files ?? []) {
-    const id = (f?.id ?? f?.type)?.trim()
+    // `type`, not `id`. Printful names the primary placement `id: "default"`
+    // on every product and puts the meaning in `type` — a tee's default is
+    // `front`, a cap's is `embroidery_front`. Reading `id` therefore collapses
+    // every product's main placement to the same meaningless "default", which
+    // matched nothing in the core lists and left the cap with no placement at
+    // all. Verified against the live catalog for variants 4025 and 7853.
+    const id = (f?.type ?? f?.id)?.trim()
     if (!id || NON_PLACEMENT_TYPES.has(id.toLowerCase()) || seen.has(id)) {
       continue
     }
