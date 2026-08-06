@@ -5,7 +5,7 @@ From catalog sync to a complete Printful backend.
 Each release closes one coherent Printful capability and leaves the plugin in a
 working state. The testing strategy tightens as the API surface grows.
 
-Eleven releases so far, `0.1.0` through `0.9.1`. Three of them — `0.5.1`,
+Twelve releases so far, `0.1.0` through `0.9.2`. Three of them — `0.5.1`,
 `0.5.2`, `0.5.3` — exist because external review found defects in shipped code;
 what they fixed is recorded in `CHANGELOG.md` rather than quietly amended.
 
@@ -13,7 +13,7 @@ what they fixed is recorded in `CHANGELOG.md` rather than quietly amended.
 
 |                   |                                                                      |
 | ----------------- | -------------------------------------------------------------------- |
-| Published version | `0.9.1`                                                              |
+| Published version | `0.9.2`                                                              |
 | Tests             | unit (`npm test`) + integration (`test:integration`, needs Postgres) |
 | Printful API used | store products, catalog, orders, shipping rates, webhooks, reports   |
 | Peer range        | `@medusajs/*` `^2.18.0`                                              |
@@ -311,8 +311,13 @@ different treatment:
   on a wall. Colours are picked for spread across lightness, so the 4–5 mockups
   per product are visibly different rather than five near-identical heathers.
   Prompts only; generation stays outside the plugin
-- **[0.9.2](https://github.com/legenki/print2medusa/issues/10)** — merch
-  bundles, which are a Medusa concern rather than a Printful one
+- **[0.9.2](https://github.com/legenki/print2medusa/issues/10)** `shipped` —
+  merch bundles, which are a Medusa concern rather than a Printful one.
+  Printful fulfils individual items, so a bundle is a Medusa product that
+  expands into its members when the order is placed — without that, a
+  three-item bundle ships one thing, or nothing at all. A bundle is stricter
+  about stock than a plain product: one sold-out member takes it off sale,
+  where a product needs every variant gone
 
 **Printful's own mockup generator does not cover this.** It renders a product on
 a plain background — a catalog thumbnail, not the editorial look these prompts
