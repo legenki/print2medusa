@@ -1,4 +1,4 @@
-import type { DesignParameters } from "./design"
+import type { DesignParameters, ProductDesignSummary } from "./design"
 
 /**
  * Prompts for fashion-style mockups, built from what Printful actually says
@@ -393,4 +393,160 @@ export function buildMockupPrompt(input: BuildPromptInput): MockupPrompt {
     label: design.color ?? noun,
     placement,
   }
+}
+
+/**
+ * How many mockups one product is worth.
+ *
+ * The store shoots 4–5 per product, so that is the ceiling. Not a knob: it is
+ * the number that makes the panel readable, and a route that answered with 84
+ * would be answering a question nobody asked.
+ */
+const MAX_PROMPTS_PER_PRODUCT = 5
+
+/**
+ * Pick which colours to build prompts for.
+ *
+ * The tee carries 84 colours and the store sells three or four of them. The
+ * useful selection is not "the first five Printful listed" — that ordering is
+ * the catalog's, and its first five are frequently near-identical greys, which
+ * is the same mockup rendered five times.
+ *
+ * So the pick is **spread across the lightness range**: sort by luma, then take
+ * evenly spaced entries including both ends. The store is deciding which
+ * colourway to shoot, and what it needs to see is the extremes and the middle —
+ * the darkest, the lightest, and the tones between. It is also stable: the same
+ * catalog produces the same five prompts every time the page is opened, so a
+ * prompt an admin copied yesterday is still there today.
+ *
+ * Colours with no hex sort last rather than being dropped. They still make a
+ * valid prompt — one without a styling clause — and dropping them would hide a
+ * colourway the store actually sells.
+ */
+function pickColors(
+  colors: ProductDesignSummary["colors"],
+  limit: number
+): ProductDesignSummary["colors"] {
+  if (colors.length <= limit) {
+    return colors
+  }
+
+  const sorted = [...colors].sort((a, b) => {
+    const la = hexLightness(a.hex)
+    const lb = hexLightness(b.hex)
+    if (la === undefined && lb === undefined) {
+      return 0
+    }
+    // Unknown lightness cannot be placed on the scale, so it goes to the end
+    // rather than being treated as black.
+    if (la === undefined) {
+      return 1
+    }
+    if (lb === undefined) {
+      return -1
+    }
+    return la - lb
+  })
+
+  // Evenly spaced across the sorted range, both ends included.
+  const step = (sorted.length - 1) / (limit - 1)
+  const picked: ProductDesignSummary["colors"] = []
+  const seen = new Set<number>()
+  for (let i = 0; i < limit; i++) {
+    const index = Math.round(i * step)
+    if (!seen.has(index)) {
+      seen.add(index)
+      picked.push(sorted[index])
+    }
+  }
+  return picked
+}
+
+export type BuildProductPromptsInput = {
+  design: ProductDesignSummary
+  style?: PromptStyle
+  /** What the artwork is. Optional; never invented when absent. */
+  artwork?: string
+  /** Ceiling on how many prompts to return. Defaults to five. */
+  limit?: number
+}
+
+/**
+ * Every prompt worth showing for one product.
+ *
+ * Built from the summary the design route already produces, so this costs no
+ * Printful call — the sync paid for the catalog lookups once.
+ *
+ * The axis that varies is whatever actually varies on the product: colour for
+ * apparel and embroidery, physical size for print media, which has no base
+ * colour by construction. Placement is the product's first core placement
+ * rather than every placement it offers — the tee exposes 17, and a page
+ * listing front, back, both sleeves and four DTF variants for each of five
+ * colours is 85 prompts nobody reads. The core placement is where the design
+ * goes; the rest are available, not intended.
+ *
+ * Returns an empty list when the product has no placement at all, which is the
+ * honest answer for a product whose design has nowhere to sit.
+ */
+export function buildProductPrompts(
+  input: BuildProductPromptsInput
+): MockupPrompt[] {
+  const { design, style, artwork } = input
+  const limit = Math.max(1, input.limit ?? MAX_PROMPTS_PER_PRODUCT)
+
+  const placement = design.core_placements[0] ?? design.placements[0]
+  if (!placement) {
+    return []
+  }
+
+  /** The product-level facts, identical on every variant. */
+  const base: DesignParameters = {
+    productClass: design.product_class,
+    ...(design.technique ? { technique: design.technique } : {}),
+    techniques: design.techniques,
+    corePlacements: design.core_placements,
+    placements: design.placements,
+    ...(design.material ? { material: design.material } : {}),
+    ...(design.brand ? { brand: design.brand } : {}),
+    ...(design.model ? { model: design.model } : {}),
+    ...(design.dimensions ? { dimensions: design.dimensions } : {}),
+    // What lets the prompt name the product — "unisex t-shirt" rather than
+    // the "garment" fallback, and what selects its wear verb and framing.
+    ...(design.catalog_product_id
+      ? { catalogProductId: design.catalog_product_id }
+      : {}),
+  }
+
+  if (design.product_class === "print_media") {
+    // Size is the axis. The first few sizes rather than a spread: unlike
+    // colour, sizes arrive in a meaningful order and the small ones are what
+    // a store leads with.
+    const sizes = design.sizes.slice(0, limit)
+    const chosen = sizes.length > 0 ? sizes : [undefined]
+    return chosen.map((size) =>
+      buildMockupPrompt({
+        design: { ...base, ...(size ? { size } : {}) },
+        placement,
+        style,
+        artwork,
+      })
+    )
+  }
+
+  const colors = pickColors(design.colors, limit)
+  const chosen =
+    colors.length > 0 ? colors : [{ name: undefined, hex: undefined }]
+
+  return chosen.map((color) =>
+    buildMockupPrompt({
+      design: {
+        ...base,
+        ...(color.name ? { color: color.name } : {}),
+        ...(color.hex ? { colorHex: color.hex } : {}),
+      },
+      placement,
+      style,
+      artwork,
+    })
+  )
 }

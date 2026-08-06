@@ -535,6 +535,12 @@ export type ProductDesignSummary = {
   model?: string
   material?: string
   dimensions?: string
+  /**
+   * Which Printful catalog product this is. A product-level fact like brand
+   * and technique, and what lets a prompt say "unisex t-shirt" rather than
+   * falling back to "garment".
+   */
+  catalog_product_id?: string
   /** Distinct base colours, in the order the variants report them. */
   colors: Array<{ name: string; hex?: string }>
   sizes: string[]
@@ -596,6 +602,7 @@ export function summarizeProductDesign(
     model: shape.model,
     material: shape.material,
     dimensions: shape.dimensions,
+    catalog_product_id: shape.catalogProductId,
     colors,
     sizes,
   }

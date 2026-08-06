@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest"
-import { buildMockupPrompt, hexLightness } from "../src/utils/prompt"
-import type { DesignParameters } from "../src/utils/design"
+import {
+  buildMockupPrompt,
+  buildProductPrompts,
+  hexLightness,
+} from "../src/utils/prompt"
+import type {
+  DesignParameters,
+  ProductDesignSummary,
+} from "../src/utils/design"
 
 /** The real parameters for the seven products, as the catalog reports them. */
 const tee: DesignParameters = {
@@ -288,5 +295,131 @@ describe("buildMockupPrompt — pairing", () => {
   it("does not reintroduce ink onto an embroidered product", () => {
     const p = buildMockupPrompt({ design: cap, placement: "embroidery_front" })
     expect(p.text.toLowerCase()).not.toMatch(/\bprinted\b|\bink\b/)
+  })
+})
+
+describe("buildProductPrompts", () => {
+  /** The tee as the design route reports it: many colours, two placements. */
+  const teeSummary: ProductDesignSummary = {
+    product_class: "apparel",
+    technique: "DTG",
+    techniques: ["DTG"],
+    core_placements: ["front", "back"],
+    placements: ["front", "back", "front_dtf"],
+    brand: "Bella + Canvas",
+    model: "3001",
+    material: "100% combed ring spun cotton",
+    colors: [
+      { name: "Black", hex: "#000000" },
+      { name: "White", hex: "#ffffff" },
+      { name: "Aqua", hex: "#008db5" },
+      { name: "Navy", hex: "#263147" },
+      { name: "Heather Dust", hex: "#e5d0c5" },
+      { name: "Team Purple", hex: "#41273f" },
+      { name: "Mustard", hex: "#d0a745" },
+    ],
+    sizes: ["S", "M", "L"],
+  }
+
+  const capSummary: ProductDesignSummary = {
+    product_class: "embroidery",
+    technique: "EMBROIDERY",
+    techniques: ["EMBROIDERY"],
+    core_placements: ["embroidery_front"],
+    placements: ["embroidery_front", "embroidery_back"],
+    brand: "Yupoong",
+    model: "6245CM",
+    colors: [{ name: "Black", hex: "#000000" }],
+    sizes: [],
+  }
+
+  const posterSummary: ProductDesignSummary = {
+    product_class: "print_media",
+    technique: "DIGITAL",
+    techniques: ["DIGITAL"],
+    core_placements: ["default"],
+    placements: ["default"],
+    model: "Paper Poster (in) | Matte",
+    colors: [],
+    sizes: ["11.69″×16.54″", "18″×24″", "24″×36″"],
+  }
+
+  it("builds a handful of prompts for a many-coloured product, not one per colour", () => {
+    // The tee really has 84 colours. A page listing 84 prompts is a page
+    // nobody reads, and 1 is not a shoot.
+    const prompts = buildProductPrompts({ design: teeSummary })
+
+    expect(prompts.length).toBeGreaterThanOrEqual(4)
+    expect(prompts.length).toBeLessThanOrEqual(5)
+  })
+
+  it("spreads the chosen colours across the lightness range", () => {
+    // Four prompts of near-identical mid greys is one mockup rendered four
+    // times. The spread is the point: the store is choosing which colourway
+    // to shoot, and wants to see the range.
+    const prompts = buildProductPrompts({ design: teeSummary })
+    const chosen = prompts
+      .map((p) => teeSummary.colors.find((c) => c.name === p.label)?.hex)
+      .map((hex) => hexLightness(hex))
+      .filter((l): l is number => l !== undefined)
+
+    expect(Math.max(...chosen) - Math.min(...chosen)).toBeGreaterThan(0.5)
+  })
+
+  it("keeps every colour when the product has only a few", () => {
+    const threeColours: ProductDesignSummary = {
+      ...teeSummary,
+      colors: teeSummary.colors.slice(0, 3),
+    }
+    const prompts = buildProductPrompts({ design: threeColours })
+
+    expect(prompts.map((p) => p.label).sort()).toEqual(
+      ["Aqua", "Black", "White"].sort()
+    )
+  })
+
+  it("builds one prompt per size for print media, which has no colours", () => {
+    // A poster's axis is physical size, and `colors` is empty by construction.
+    // Keying on colour would produce nothing at all.
+    const prompts = buildProductPrompts({ design: posterSummary })
+
+    expect(prompts.length).toBeGreaterThan(0)
+    expect(prompts.some((p) => p.text.includes("11.69″×16.54″"))).toBe(true)
+  })
+
+  it("uses the product's own core placement, never a chest on a cap", () => {
+    const prompts = buildProductPrompts({ design: capSummary })
+
+    expect(prompts.length).toBeGreaterThan(0)
+    for (const p of prompts) {
+      expect(p.placement).toBe("embroidery_front")
+      expect(p.text.toLowerCase()).not.toContain("on the chest")
+    }
+  })
+
+  it("carries the material and technique the summary reported", () => {
+    const prompts = buildProductPrompts({ design: teeSummary })
+    expect(prompts[0].text).toContain("combed ring spun cotton")
+    expect(prompts[0].text.toLowerCase()).toContain("printed directly")
+  })
+
+  it("names the artwork when given one, and says nothing when not", () => {
+    const withArt = buildProductPrompts({
+      design: teeSummary,
+      artwork: "a hand-drawn crescent moon",
+    })
+    expect(withArt[0].text).toContain("a hand-drawn crescent moon")
+
+    const without = buildProductPrompts({ design: teeSummary })
+    expect(without[0].text).not.toContain("crescent")
+  })
+
+  it("returns nothing for a product with no placement to put a design on", () => {
+    const placeless: ProductDesignSummary = {
+      ...teeSummary,
+      core_placements: [],
+      placements: [],
+    }
+    expect(buildProductPrompts({ design: placeless })).toEqual([])
   })
 })
