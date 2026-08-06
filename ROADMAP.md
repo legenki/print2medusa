@@ -27,7 +27,8 @@ Still unwired: **taxes** (Printful's `/tax/rates` exists but its request and
 response schemas are undocumented, so implementing a Medusa tax provider against
 it would be guesswork), **returns** (API v1 has no endpoint for them at all —
 only a `package_returned` webhook reporting one that already happened), and
-**mockups** (v1 has the endpoints; simply not built yet).
+**mockups** (v1 has the endpoints; `0.9.x` below takes a different route —
+prompts for external image generation rather than Printful's flat renders).
 
 Only returns genuinely require API v2, which is why they alone are held to
 `1.0.0`.
@@ -278,6 +279,43 @@ intervene.
   server-side heartbeat check proves the operator is right. The write is
   conditional on the heartbeat observed, so a revived sync is never marked
   failed underneath a live process.
+
+---
+
+## 0.9.x — Design parameters, prompts, bundles `next`
+
+The plugin knows how to sell a Printful product. It knows nothing about the
+**design** on it — and that is the work of a store shipping new artwork every
+two weeks across seven products.
+
+Seven products, profiled against the live catalog: tee (Bella + Canvas 3001),
+hoodie (Cotton Heritage M2580), dad hat (Yupoong 6245CM), matte poster, framed
+poster, eco tote, kiss-cut stickers. They fall into three classes that need
+different treatment:
+
+| Class       | Products                       | What drives the design                          |
+| ----------- | ------------------------------ | ----------------------------------------------- |
+| Apparel     | tee (84 colours), hoodie, tote | base colour + hex, material, placement          |
+| Embroidery  | dad hat — **no DTG at all**    | thread, and its placement is `embroidery_front` |
+| Print media | posters (33 sizes), stickers   | physical size; no base colour exists            |
+
+- **[0.9.0](https://github.com/legenki/print2medusa/issues/8)** — design
+  parameters on the admin page: technique, placements, colour swatch, size
+- **[0.9.1](https://github.com/legenki/print2medusa/issues/9)** — mockup prompt
+  generator. Prompts only; image generation stays outside the plugin, so no API
+  keys, quotas or file storage enter this repo
+- **[0.9.2](https://github.com/legenki/print2medusa/issues/10)** — merch
+  bundles, which are a Medusa concern rather than a Printful one
+
+**Printful's own mockup generator does not cover this.** It renders a product on
+a plain background — a catalog thumbnail, not the editorial look these prompts
+target. That is a text-to-image job; the plugin's part is producing a prompt
+carrying true product facts.
+
+Print area geometry (pixels, DPI) is
+[tracked separately](https://github.com/legenki/print2medusa/issues/11): it
+needs an authenticated probe, since both endpoints answer `401` and Printful
+publishes no schema for them.
 
 ---
 
