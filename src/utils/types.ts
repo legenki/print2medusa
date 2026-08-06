@@ -336,3 +336,67 @@ export type PrintfulStatisticsParams = {
   reportTypes: string
   currency?: string
 }
+
+/** One material and how much of the garment it is, as Printful reports it. */
+export type PrintfulMaterial = {
+  name?: string
+  percentage?: number
+}
+
+/**
+ * A print technique. `DTG` is direct-to-garment ink, `EMBROIDERY` is thread,
+ * `DTFILM` is a transfer film, `DIGITAL` is paper and vinyl.
+ *
+ * The distinction is not cosmetic: a cap that only supports `EMBROIDERY`
+ * cannot be described as printed, and a mockup of it should show stitching.
+ */
+export type PrintfulTechnique = {
+  key?: string
+  display_name?: string
+  is_default?: boolean
+}
+
+/** A place a design can go — `front`, `back`, `embroidery_front`, `default`. */
+export type PrintfulPlacement = {
+  id?: string
+  type?: string
+  title?: string
+  additional_price?: string | null
+}
+
+/**
+ * A catalog variant with the product it belongs to.
+ *
+ * From `GET /products/variant/{id}`, which is public — no token needed. Worth
+ * preferring over `GET /products/{id}`: the techniques it lists are the ones
+ * that apply to **this variant**, which is narrower and more accurate than the
+ * product's full set. Variant 4025 reports `DTG` alone where product 71 reports
+ * `DTG, EMBROIDERY, DTFILM`.
+ */
+export type PrintfulCatalogVariant = {
+  variant: {
+    id?: number
+    product_id?: number
+    name?: string
+    size?: string
+    color?: string
+    /** Hex, e.g. `#008db5`. The strongest prompt parameter after the artwork. */
+    color_code?: string
+    color_code2?: string
+    image?: string
+    material?: PrintfulMaterial[]
+    availability_status?: string
+  }
+  product: {
+    id?: number
+    title?: string
+    type_name?: string
+    brand?: string
+    model?: string
+    description?: string
+    /** Physical sizes, present on print media and absent on apparel. */
+    dimensions?: Record<string, string> | null
+    techniques?: PrintfulTechnique[]
+    files?: PrintfulPlacement[]
+  }
+}

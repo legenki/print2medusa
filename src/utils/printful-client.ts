@@ -9,6 +9,7 @@ import type {
   PrintfulWebhookConfig,
   ShippingInfo,
   ShippingRatesRequest,
+  PrintfulCatalogVariant,
   PrintfulStatisticsParams,
   PrintfulStoreStatistics,
 } from "./types"
@@ -175,6 +176,32 @@ export class PrintfulClient {
       method: "DELETE",
     })
     return data.result ?? { url: null, types: [] }
+  }
+
+  /**
+   * Catalog detail for one variant: colour and its hex, material, brand, and
+   * the techniques and placements the design can use.
+   *
+   * Reads `/products/variant/{id}` rather than `/products/{id}` because the
+   * techniques it lists are the ones applicable to **this variant**. Variant
+   * 4025 reports `DTG` alone where product 71 reports `DTG, EMBROIDERY,
+   * DTFILM` — the narrower answer is the true one for a given colour and size.
+   *
+   * Returns `null` on any failure rather than throwing. This is called during
+   * a catalog sync, and design parameters are an enrichment: losing them must
+   * not fail an import of a product that is otherwise fine to sell.
+   */
+  async getCatalogVariant(
+    catalogVariantId: number | string
+  ): Promise<PrintfulCatalogVariant | null> {
+    try {
+      const data = await this.request<PrintfulCatalogVariant>(
+        `/products/variant/${catalogVariantId}`
+      )
+      return data.result ?? null
+    } catch {
+      return null
+    }
   }
 
   /**
