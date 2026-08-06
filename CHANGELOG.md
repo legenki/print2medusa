@@ -1,5 +1,56 @@
 # Changelog
 
+## 0.9.1
+
+Mockup prompts, built from what Printful actually says about the product.
+
+### Added
+
+- **A "Mockup prompts" panel** on the Printful admin page: pick a style, say
+  what the artwork is, copy a prompt per product.
+- **`GET /admin/printful/prompts`** — a database read plus string assembly.
+
+### What the plugin does and does not do here
+
+**It writes prompts and stops.** Image generation happens wherever you paste
+them, which keeps API keys, rate-limit queues and file storage out of a repo
+that is otherwise a clean Printful-to-Medusa integration.
+
+**Printful's own mockup generator does not cover this.** It renders a product
+on a plain background — right for a catalogue thumbnail, wrong for the
+editorial look these prompts target.
+
+### Three shapes, because the products differ in kind
+
+- **Apparel** — a model wearing it, the fabric named, styled with a companion
+  garment chosen by how light the base colour is
+- **Embroidery** — thread, never ink. The dad hat supports `EMBROIDERY` only,
+  so a prompt calling it printed describes an object Printful cannot make. It
+  is also framed head-and-shoulders rather than "full garment visible"
+- **Print media** — an object on a wall. No model, no fabric, no base colour,
+  and the variant's own size rather than the product's size table
+
+The tote is neither worn nor printed on a chest: it is _carried_, and its
+design sits on the front panel.
+
+### What it refuses to invent
+
+Every clause is dropped rather than defaulted when Printful did not report the
+fact. The cap has no material in the catalog, so its prompt says nothing about
+fabric — a guess of "cotton" would be a claim about the garment. A colour with
+no hex gets no hex and no pairing: styling an unknown base colour is the same
+error in a different place.
+
+### Colour is the axis
+
+A design ships across seven products every two weeks, and colour is what the
+4–5 mockups per product vary along. Colours are picked for **spread across
+lightness** rather than catalogue order — five near-identical heathers would
+be five near-identical images.
+
+Pairing is a table keyed by lightness band, not colour theory: a merchant can
+read the file and predict what a new colour produces.
+
 ## 0.9.0
 
 Design parameters: what a design becomes on each product.
