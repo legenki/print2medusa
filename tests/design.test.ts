@@ -3,6 +3,7 @@ import {
   classifyProduct,
   corePlacementsFor,
   planDesignParameters,
+  summarizeProductDesign,
   PLACEMENTS_BY_CLASS,
 } from "../src/utils/design"
 import type { PrintfulCatalogVariant } from "../src/utils/types"
@@ -453,5 +454,80 @@ describe("placement ids as Printful actually shapes them", () => {
   it("still classifies both correctly from the real payloads", () => {
     expect(classifyProduct(tee)).toBe("apparel")
     expect(classifyProduct(cap)).toBe("embroidery")
+  })
+})
+
+describe("summarizeProductDesign", () => {
+  const v = (design?: Record<string, unknown>) => ({
+    metadata: design ? { printful_design: design } : {},
+  })
+
+  const tee = (color: string, hex: string, size: string) => ({
+    productClass: "apparel",
+    technique: "DTG",
+    techniques: ["DTG"],
+    corePlacements: ["front", "back"],
+    placements: ["front", "back", "front_dtf"],
+    brand: "Bella + Canvas",
+    model: "3001",
+    color,
+    colorHex: hex,
+    size,
+  })
+
+  it("collects distinct colours and sizes across variants", () => {
+    // The real shape: 84 colours by 9 sizes means the same colour arrives
+    // nine times. Listing it nine times would make the swatch row useless.
+    const got = summarizeProductDesign([
+      v(tee("Aqua", "#008db5", "S")),
+      v(tee("Aqua", "#008db5", "M")),
+      v(tee("Black", "#000000", "S")),
+    ])
+
+    expect(got?.colors).toEqual([
+      { name: "Aqua", hex: "#008db5" },
+      { name: "Black", hex: "#000000" },
+    ])
+    expect(got?.sizes).toEqual(["S", "M"])
+  })
+
+  it("takes product-level facts from the first variant that has them", () => {
+    const got = summarizeProductDesign([v(), v(tee("Aqua", "#008db5", "S"))])
+    expect(got?.technique).toBe("DTG")
+    expect(got?.core_placements).toEqual(["front", "back"])
+    expect(got?.brand).toBe("Bella + Canvas")
+  })
+
+  it("returns null when no variant was ever enriched", () => {
+    // Distinct from a summary with empty fields. A product the sync never
+    // enriched is not a product without design parameters, and the page must
+    // not present it as one.
+    expect(summarizeProductDesign([v(), v()])).toBeNull()
+    expect(summarizeProductDesign([])).toBeNull()
+  })
+
+  it("keeps a colour whose hex Printful did not report", () => {
+    // The swatch must render as absent rather than black — an invented hex is
+    // a claim about the garment.
+    const got = summarizeProductDesign([
+      v({ ...tee("Heather", "", "S"), colorHex: undefined }),
+    ])
+    expect(got?.colors).toEqual([{ name: "Heather", hex: undefined }])
+  })
+
+  it("summarises print media, which has sizes and no colours", () => {
+    const got = summarizeProductDesign([
+      v({
+        productClass: "print_media",
+        technique: "DIGITAL",
+        techniques: ["DIGITAL"],
+        corePlacements: ["default"],
+        placements: ["default"],
+        size: "3″×3″",
+      }),
+    ])
+    expect(got?.product_class).toBe("print_media")
+    expect(got?.colors).toEqual([])
+    expect(got?.sizes).toEqual(["3″×3″"])
   })
 })

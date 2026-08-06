@@ -523,3 +523,80 @@ export async function enrichVariantsWithDesign(
     })
   )
 }
+
+/** One product's design parameters, folded from its variants for display. */
+export type ProductDesignSummary = {
+  product_class: DesignParameters["productClass"]
+  technique?: string
+  techniques: string[]
+  core_placements: string[]
+  placements: string[]
+  brand?: string
+  model?: string
+  material?: string
+  dimensions?: string
+  /** Distinct base colours, in the order the variants report them. */
+  colors: Array<{ name: string; hex?: string }>
+  sizes: string[]
+}
+
+/**
+ * Fold a product's variants into one design summary.
+ *
+ * Product-level facts — class, technique, placements, brand — are identical
+ * across every variant, so the first variant carrying design metadata answers
+ * for the product. Colour and size are the axes that vary, and are collected.
+ *
+ * Returns `null` when no variant carries design metadata. That is deliberately
+ * distinct from a summary with empty fields: a product that was never enriched
+ * is not a product with no design parameters, and a page that renders the two
+ * identically tells the owner something false about a product that is fine.
+ */
+export function summarizeProductDesign(
+  variants: Array<{ metadata?: Record<string, unknown> | null }>
+): ProductDesignSummary | null {
+  let shape: DesignParameters | undefined
+  const colors: Array<{ name: string; hex?: string }> = []
+  const sizes: string[] = []
+  const seenColor = new Set<string>()
+  const seenSize = new Set<string>()
+
+  for (const variant of variants) {
+    const design = (variant?.metadata ?? {})[DESIGN_METADATA_KEY] as
+      DesignParameters | undefined
+    if (!design) {
+      continue
+    }
+
+    shape ??= design
+
+    if (design.color && !seenColor.has(design.color)) {
+      seenColor.add(design.color)
+      // The hex rides with the name rather than being looked up separately:
+      // a swatch without one must render as absent, not as black.
+      colors.push({ name: design.color, hex: design.colorHex })
+    }
+    if (design.size && !seenSize.has(design.size)) {
+      seenSize.add(design.size)
+      sizes.push(design.size)
+    }
+  }
+
+  if (!shape) {
+    return null
+  }
+
+  return {
+    product_class: shape.productClass,
+    technique: shape.technique,
+    techniques: shape.techniques,
+    core_placements: shape.corePlacements,
+    placements: shape.placements,
+    brand: shape.brand,
+    model: shape.model,
+    material: shape.material,
+    dimensions: shape.dimensions,
+    colors,
+    sizes,
+  }
+}
