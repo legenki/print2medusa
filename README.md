@@ -98,6 +98,7 @@ See `examples/basic-store/` for a fuller snippet.
 | Status               | `GET /admin/printful/status` + product list widget                                        |
 | Admin page           | **Printful** in the sidebar: sales, sync history, webhook health, stuck-sync recovery     |
 | Design parameters    | Per product: class, technique, where the design goes, base colours with hex               |
+| Mockup prompts       | Paste-ready prompts per product and colour, in three shapes for the three product classes |
 | Shipment tracking    | Printful webhooks → Medusa fulfillment + shipment per parcel, with tracking               |
 | Order visibility     | Printful status and per-parcel tracking on the Admin order page                           |
 
@@ -377,6 +378,34 @@ built from them without calling Printful.
 **What it does not show:** print area dimensions and DPI. Those need an
 authenticated endpoint whose response schema Printful does not publish, so the
 panel says _where_ a design goes rather than how large the printable region is.
+
+## Mockup prompts
+
+The **Mockup prompts** panel turns design parameters into prompts you paste into
+an image model. Pick a style, say what the artwork is, copy one per product.
+
+**The plugin writes prompts and stops there.** Generation happens wherever you
+paste them — which is why no API keys, rate limits or image storage live in this
+repo. Printful's own mockup generator is a different tool: it renders a product
+on a plain background, right for a catalogue thumbnail and wrong for an
+editorial mockup.
+
+Prompts come in three shapes because the products differ in kind:
+
+- **Apparel** — a model wearing it, the fabric named, styled with a companion
+  garment chosen by how light the base colour is
+- **Embroidery** — thread, never ink, and framed head-and-shoulders rather than
+  full-length. The dad hat supports `EMBROIDERY` only; a prompt calling it
+  printed would describe something Printful cannot make
+- **Print media** — an object on a wall. No model, no fabric, no base colour
+
+Colour is the axis the variations run along, and colours are picked for spread
+across lightness rather than catalogue order — five near-identical heathers
+would produce five near-identical images.
+
+**Nothing is invented.** A clause is dropped rather than defaulted when Printful
+did not report the fact: the cap has no material in the catalog, so its prompt
+says nothing about fabric.
 
 ## Admin usage
 

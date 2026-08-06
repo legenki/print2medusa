@@ -5,23 +5,24 @@ From catalog sync to a complete Printful backend.
 Each release closes one coherent Printful capability and leaves the plugin in a
 working state. The testing strategy tightens as the API surface grows.
 
-Nine releases so far, `0.1.0` through `0.8.2`. Three of them — `0.5.1`, `0.5.2`,
-`0.5.3` — exist because external review found defects in shipped code; what they
-fixed is recorded in `CHANGELOG.md` rather than quietly amended.
+Eleven releases so far, `0.1.0` through `0.9.1`. Three of them — `0.5.1`,
+`0.5.2`, `0.5.3` — exist because external review found defects in shipped code;
+what they fixed is recorded in `CHANGELOG.md` rather than quietly amended.
 
 ## Where we are
 
 |                   |                                                                      |
 | ----------------- | -------------------------------------------------------------------- |
-| Published version | `0.9.0`                                                              |
+| Published version | `0.9.1`                                                              |
 | Tests             | unit (`npm test`) + integration (`test:integration`, needs Postgres) |
 | Printful API used | store products, catalog, orders, shipping rates, webhooks, reports   |
 | Peer range        | `@medusajs/*` `^2.18.0`                                              |
 
 The plugin covers products, orders, order cancellation, webhook configuration,
 order status, live shipping rates, stock-driven publication, removal from
-Printful on full sync, order costs, shipping-method confirmation, and a
-Printful admin page with sales figures, sync history and webhook health.
+Printful on full sync, order costs, shipping-method confirmation, a Printful
+admin page with sales figures, sync history and webhook health, and design
+parameters with paste-ready mockup prompts.
 
 Still unwired: **taxes** (Printful's `/tax/rates` exists but its request and
 response schemas are undocumented, so implementing a Medusa tax provider against
@@ -304,9 +305,12 @@ different treatment:
   swatches with hex, sizes. The catalog is read once per colour rather than
   once per variant, so a tee with 84 colours across 9 sizes costs 84 calls
   rather than 756
-- **[0.9.1](https://github.com/legenki/print2medusa/issues/9)** — mockup prompt
-  generator. Prompts only; image generation stays outside the plugin, so no API
-  keys, quotas or file storage enter this repo
+- **[0.9.1](https://github.com/legenki/print2medusa/issues/9)** `shipped` —
+  mockup prompt generator. Three prompt shapes, because the products differ in
+  kind: a garment on a model, a stitched cap framed head-and-shoulders, a print
+  on a wall. Colours are picked for spread across lightness, so the 4–5 mockups
+  per product are visibly different rather than five near-identical heathers.
+  Prompts only; generation stays outside the plugin
 - **[0.9.2](https://github.com/legenki/print2medusa/issues/10)** — merch
   bundles, which are a Medusa concern rather than a Printful one
 

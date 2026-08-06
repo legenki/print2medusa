@@ -531,3 +531,29 @@ describe("summarizeProductDesign", () => {
     expect(got?.sizes).toEqual(["3″×3″"])
   })
 })
+
+describe("summarizeProductDesign carries the catalog id", () => {
+  it("keeps catalogProductId, which names the product in a prompt", () => {
+    // A product-level fact like brand and technique — identical on every
+    // variant. Dropping it makes a prompt say "a model wearing a Black
+    // garment" where it should say "a unisex t-shirt", because the prompt
+    // builder looks the noun up by catalog id.
+    const got = summarizeProductDesign([
+      {
+        metadata: {
+          printful_design: {
+            productClass: "apparel",
+            techniques: ["DTG"],
+            corePlacements: ["front"],
+            placements: ["front"],
+            color: "Black",
+            colorHex: "#000000",
+            catalogProductId: "71",
+          },
+        },
+      },
+    ])
+
+    expect(got?.catalog_product_id).toBe("71")
+  })
+})

@@ -3,8 +3,11 @@ import {
   Badge,
   Button,
   Container,
+  Copy,
   Heading,
+  Input,
   Prompt,
+  Select,
   Table,
   Text,
   toast,
@@ -44,6 +47,13 @@ type Stats = {
   profit?: { value?: number; relative_difference?: number }
   total_paid_orders?: { value?: number; relative_difference?: number }
   average_fulfillment_time?: { value?: number; relative_difference?: number }
+}
+
+type PromptRow = {
+  product_id: string
+  title: string
+  product_class: string
+  prompts: Array<{ text: string; label: string; placement: string }>
 }
 
 type DesignRow = {
@@ -118,6 +128,12 @@ const PrintfulPage = () => {
   const [health, setHealth] = useState<Health | null>(null)
   const [stats, setStats] = useState<Stats | null>(null)
   const [designs, setDesigns] = useState<DesignRow[]>([])
+  const [promptProducts, setPromptProducts] = useState<PromptRow[]>([])
+  const [styles, setStyles] = useState<Array<{ id: string; label: string }>>([])
+  const [style, setStyle] = useState("editorial")
+  // What the artwork is. Optional — a prompt without it still describes the
+  // product truthfully, which is the part the plugin can actually vouch for.
+  const [artwork, setArtwork] = useState("")
   const [loading, setLoading] = useState(true)
   const [clearing, setClearing] = useState(false)
 
@@ -150,9 +166,37 @@ const PrintfulPage = () => {
     setLoading(false)
   }, [])
 
+  const loadPrompts = useCallback(async () => {
+    const params = new URLSearchParams({ style })
+    if (artwork.trim()) {
+      params.set("artwork", artwork.trim())
+    }
+    try {
+      const res = await fetch(`/admin/printful/prompts?${params}`, {
+        credentials: "include",
+      })
+      if (!res.ok) {
+        return
+      }
+      const body = await res.json()
+      setPromptProducts(body.products ?? [])
+      setStyles(body.styles ?? [])
+    } catch {
+      // Same rule as the other panels: a dead endpoint leaves this section
+      // empty rather than blanking the page.
+    }
+  }, [style, artwork])
+
   useEffect(() => {
     void load()
   }, [load])
+
+  // Separate from `load` on purpose. Prompts depend on the style and artwork
+  // the admin is typing, and the sync poll runs every three seconds — sharing
+  // a fetch would rebuild the list under the cursor.
+  useEffect(() => {
+    void loadPrompts()
+  }, [loadPrompts])
 
   const latest = syncs[0]
   const running = latest?.status === "running"
@@ -372,6 +416,73 @@ const PrintfulPage = () => {
                   {d.sizes.length > 8 ? ` +${d.sizes.length - 8}` : ""}
                 </Text>
               )}
+            </div>
+          ))
+        )}
+      </div>
+
+      <div className="px-6 py-4 flex flex-col gap-3">
+        <Text size="small" weight="plus">
+          Mockup prompts
+        </Text>
+        <Text size="small" className="text-ui-fg-subtle">
+          Paste these into an image model. Printful&rsquo;s own generator
+          renders a product on a plain background &mdash; right for a catalogue
+          thumbnail, not for an editorial mockup.
+        </Text>
+
+        <div className="flex items-center gap-2 flex-wrap">
+          <Select value={style} onValueChange={setStyle}>
+            <Select.Trigger className="w-40">
+              <Select.Value placeholder="Style" />
+            </Select.Trigger>
+            <Select.Content>
+              {styles.map((s) => (
+                <Select.Item key={s.id} value={s.id}>
+                  {s.label}
+                </Select.Item>
+              ))}
+            </Select.Content>
+          </Select>
+          <Input
+            className="flex-1 min-w-64"
+            placeholder="What is the artwork? (optional)"
+            value={artwork}
+            onChange={(e) => setArtwork(e.target.value)}
+          />
+        </div>
+
+        {promptProducts.length === 0 ? (
+          <Text size="small" className="text-ui-fg-subtle">
+            {loading
+              ? "Loading\u2026"
+              : "No prompts yet. Run a sync so products carry design parameters."}
+          </Text>
+        ) : (
+          promptProducts.map((p) => (
+            <div key={p.product_id} className="flex flex-col gap-2">
+              <Text size="small" weight="plus">
+                {p.title}
+              </Text>
+              {p.prompts.map((prompt, i) => (
+                <div
+                  key={`${p.product_id}-${i}`}
+                  className="flex items-start gap-2 rounded-md border border-ui-border-base p-2"
+                >
+                  <div className="flex flex-col gap-1 flex-1">
+                    <Text size="xsmall" className="text-ui-fg-muted">
+                      {prompt.label}
+                    </Text>
+                    <Text size="small" className="text-ui-fg-subtle">
+                      {prompt.text}
+                    </Text>
+                  </div>
+                  {/* Copy rather than a select-all: the prompt is long enough
+                      that hand-selecting it is the slow step in a workflow
+                      repeated seven times a fortnight. */}
+                  <Copy content={prompt.text} />
+                </div>
+              ))}
             </div>
           ))
         )}
