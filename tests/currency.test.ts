@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest"
-import { minorUnitFactor, isZeroDecimalCurrency } from "../src/utils/currency"
+import {
+  minorUnitFactor,
+  isZeroDecimalCurrency,
+  ZERO_DECIMAL_CURRENCIES as ZERO_DECIMAL_FOR_TEST,
+} from "../src/utils/currency"
 
 describe("isZeroDecimalCurrency", () => {
   it("recognizes the currencies with no minor unit", () => {
@@ -56,5 +60,63 @@ describe("minorUnitFactor", () => {
   it("is 100 for anything it cannot identify", () => {
     expect(minorUnitFactor(undefined)).toBe(100)
     expect(minorUnitFactor("ZZZ")).toBe(100)
+  })
+})
+
+describe("the built-in list against Medusa's own table", () => {
+  // Imported here, in a test that only ever runs under Node. The module under
+  // test deliberately does not import it: `@medusajs/framework/utils` reaches
+  // jsonwebtoken → jws → util.inherits, which a browser does not have, and the
+  // admin widget imports currency.ts. See the header of src/utils/currency.ts.
+  //
+  // This is what makes the hand-written list safe. The usual objection — that
+  // HUF, ISK and CLP get missed — is answered by failing here rather than by
+  // trusting whoever edits the list next.
+  it("classifies every currency Medusa knows the same way Medusa does", async () => {
+    const { defaultCurrencies } = await import("@medusajs/framework/utils")
+
+    const disagreements = Object.entries(defaultCurrencies)
+      .filter(
+        ([code, entry]) =>
+          isZeroDecimalCurrency(code) !== (entry.decimal_digits === 0)
+      )
+      .map(([code]) => code)
+
+    expect(disagreements).toEqual([])
+  })
+
+  it("holds no code Medusa does not consider zero-decimal", async () => {
+    // The reverse direction. The test above walks Medusa's table, so a code
+    // this list invented — a typo, or one Medusa later dropped — would never
+    // be visited and would go on forcing a factor of 1 on real money.
+    const { defaultCurrencies } = await import("@medusajs/framework/utils")
+
+    const known = new Set(
+      Object.entries(defaultCurrencies)
+        .filter(([, entry]) => entry.decimal_digits === 0)
+        .map(([code]) => code)
+    )
+
+    const missing = [...known].filter((code) => !isZeroDecimalCurrency(code))
+    expect(missing).toEqual([])
+
+    // The direction the check above cannot see. A code this list invented — a
+    // typo, or one Medusa later dropped — is absent from Medusa's table, so
+    // walking that table never visits it. Left unchecked it would go on
+    // forcing a factor of 1 on money that has subunits, deflating every
+    // amount in that currency by a hundred.
+    const everyCode = Object.keys(defaultCurrencies)
+    const invented = everyCode.filter(
+      (code) => isZeroDecimalCurrency(code) && !known.has(code)
+    )
+    expect(invented).toEqual([])
+
+    // Nothing outside Medusa's table at all: a code Medusa never had would
+    // pass both filters above, since both iterate the table.
+    const knownEverywhere = new Set(everyCode)
+    const strangers = [...ZERO_DECIMAL_FOR_TEST].filter(
+      (code) => !knownEverywhere.has(code)
+    )
+    expect(strangers).toEqual([])
   })
 })
