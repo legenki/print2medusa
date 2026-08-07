@@ -1,5 +1,47 @@
 # Changelog
 
+## 0.9.3
+
+Fixes a crash that made the entire Medusa admin fail to load.
+
+### Fixed
+
+- **`chr.inherits is not a function` on admin load.** `src/utils/currency.ts`
+  imported `defaultCurrencies` from `@medusajs/framework/utils`, and the admin
+  order widget imports that file. The package reaches
+  `@medusajs/utils/dist/auth/token.js` → `jsonwebtoken` → `jws`, which calls
+  `util.inherits` — a Node API absent in browsers. The failure was total: not a
+  broken widget, a blank admin.
+
+The currency table is now written out in the module, with no package import.
+
+### Why this was not caught
+
+The import is valid TypeScript and the module exists; only the runtime
+environment makes it wrong, so typecheck and the build were both green. The
+file's own comment reasoned about the server — "`@medusajs/framework` is a peer
+dependency, so the table is always present in a host app" — which is true, and
+irrelevant to a file the browser also loads.
+
+`tests/admin-bundle.test.ts` now walks every file reachable from `src/admin`
+and fails on any server-only package import. Reintroducing the original line
+fails it.
+
+### The hand-written list is checked, not trusted
+
+Taking the table from Medusa was the right instinct: a hand-kept list is how
+HUF, ISK and CLP get missed. `currency.test.ts` now compares the built-in set
+against `defaultCurrencies` in both directions — a missing code and an invented
+one each fail — so the data still comes from Medusa while the import stays on
+the server.
+
+### Known limits
+
+- **Six three-decimal currencies are still scaled by 100.** BHD, JOD, KWD, LYD,
+  OMR and TND carry `decimal_digits: 3` in Medusa's table, and this code has
+  only ever asked whether a currency is zero-decimal. Pre-existing, unchanged
+  here, and recorded rather than quietly carried.
+
 ## 0.9.2
 
 Merch bundles: one Medusa product that ships as several Printful ones.
