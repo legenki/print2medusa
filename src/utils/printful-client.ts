@@ -143,6 +143,30 @@ export class PrintfulClient {
     return data.result
   }
 
+  /**
+   * Look an order up by the `external_id` we sent when creating it.
+   *
+   * This is the idempotency key for order creation: when a POST /orders ends
+   * with an outcome we cannot determine — a timeout, a dropped connection —
+   * this answers whether Printful actually created it. Without it the only
+   * options are to retry (and risk printing and shipping a second time) or to
+   * give up on the order.
+   *
+   * Printful addresses an order by external id with an `@` prefix. The prefix
+   * is applied here rather than by callers so no one can accidentally pass a
+   * bare external id to `getOrder` and read a *different* order that happens
+   * to carry that numeric Printful id.
+   *
+   * Throws `PrintfulApiError` with `status: 404` when no such order exists —
+   * which is the meaningful "it was never created" answer.
+   */
+  async getOrderByExternalId(externalId: string): Promise<PrintfulOrder> {
+    const data = await this.request<PrintfulOrder>(
+      `/orders/@${encodeURIComponent(externalId)}`
+    )
+    return data.result
+  }
+
   async cancelOrder(id: number | string): Promise<PrintfulOrder> {
     const data = await this.request<PrintfulOrder>(`/orders/${id}`, {
       method: "DELETE",
