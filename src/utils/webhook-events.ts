@@ -20,6 +20,14 @@ export function verifyWebhookToken(
   return timingSafeEqual(a, b)
 }
 
+/**
+ * The internal Medusa event the webhook route emits and the subscriber listens
+ * for. Shared so the two cannot drift apart — a typo on either side would be
+ * silent: the route would answer 200, the subscriber would never fire, and the
+ * event would only be applied by the retry job.
+ */
+export const PRINTFUL_WEBHOOK_RECEIVED = "printful.webhook.received"
+
 /** Event types we register with Printful. order_updated is noisy and opt-in. */
 export const PRINTFUL_WEBHOOK_TYPES = [
   "package_shipped",

@@ -29,11 +29,15 @@ import {
 } from "../utils/removed"
 import { CatalogVariantCache, enrichVariantsWithDesign } from "../utils/design"
 import { planBundlePass, type ProductForBundlePass } from "../utils/bundle"
+import type {
+  PrintfulSyncProductSummary,
+  PrintfulSyncProductDetail,
+  PrintfulPluginOptions,
+} from "../utils/types"
+import type { ProductDTO } from "@medusajs/framework/types"
 
 export type SyncProductsInput = {
-  /** The claimed sync log. The workflow never claims — the route already did. */
   sync_log_id: string
-  /** Optional limit for testing or a partial sync. */
   limit?: number
 }
 
@@ -43,25 +47,28 @@ type SyncCounters = {
   failed: number
   errors: string[]
 }
+type CreateProductInput = NonNullable<
+  Parameters<typeof createProductsWorkflow.runAsStep>[0]
+>["input"]["products"][0]
+type CreateVariantInput = NonNullable<
+  NonNullable<
+    Parameters<typeof batchProductVariantsWorkflow.runAsStep>[0]
+  >["input"]["create"]
+>[0]
+type UpdateVariantInput = NonNullable<
+  NonNullable<
+    Parameters<typeof batchProductVariantsWorkflow.runAsStep>[0]
+  >["input"]["update"]
+>[0]
 
-const syncProductsStep = createStep(
+const fetchPrintfulProductsStep = createStep(
   {
-    name: "printful-sync-products",
-    // Runs past the HTTP response and completes on its own — no
-    // setStepSuccess needed, which is what backgroundExecution adds to async.
+    name: "printful-fetch-products",
     async: true,
     backgroundExecution: true,
-    // No timeout on purpose. Medusa schedules one only when the step sets it
-    // (TransactionStep.hasTimeout() returns !!definition.timeout, and
-    // transaction-orchestrator.js:637 guards on it), so omitting it is the
-    // safe state. Any value we picked could be exceeded by a large enough
-    // catalog, and the penalty is a SUCCESSFUL sync being reverted — deleting
-    // the orphans it was about to link.
   },
   async (input: SyncProductsInput, { container }) => {
     const printful: PrintfulModuleService = container.resolve(PRINTFUL_MODULE)
-    const productModule = container.resolve(Modules.PRODUCT)
-    const logger = container.resolve(ContainerRegistrationKeys.LOGGER)
     const client = await printful.getClient()
     const options = await printful.getOptions()
     const storeId = await printful.getStoreId()
@@ -73,59 +80,118 @@ const syncProductsStep = createStep(
     const toProcess =
       input.limit != null ? summaries.slice(0, input.limit) : summaries
 
-    const counters: SyncCounters = {
-      created: 0,
-      updated: 0,
-      failed: 0,
-      errors: [],
-    }
-
-    // Products created but not yet linked. A crash leaves exactly these
-    // invisible to the next sync's findProductLink, so they are the only
-    // thing the compensation may delete.
-    const orphans = new OrphanTracker()
-
-    // One cache for the whole run, not one per product, so a blank two
-    // products share costs a single call across the catalogue. Inside a
-    // product it is what keeps a 756-variant tee at 84 calls instead of 756.
-    const catalogCache = new CatalogVariantCache((id) =>
-      client.getCatalogVariant(id)
-    )
-
-    let processed = 0
     await printful.heartbeatSyncLog(input.sync_log_id, {
       products_total: toProcess.length,
     })
+
+    const detailsMap = new Map<string, PrintfulSyncProductDetail>()
+    let processed = 0
+    const errors: string[] = []
+    let failed = 0
 
     for (const summary of toProcess) {
       if (summary.is_ignored) {
         continue
       }
-
-      // Scoped to this iteration so the catch below knows which product, if
-      // any, this pass created. Set the moment the product exists in Medusa
-      // and cleared once its link row is written.
-      let pendingProductId: string | undefined
-
       try {
         const detail = await client.getSyncProduct(summary.id)
         if (!detail.sync_variants?.length) {
-          counters.failed += 1
-          counters.errors.push(`Product ${summary.id} has no variants`)
+          failed += 1
+          errors.push(`Product ${summary.id} has no variants`)
           continue
         }
+        detailsMap.set(String(summary.id), detail)
+      } catch (err) {
+        failed += 1
+        const message = err instanceof Error ? err.message : String(err)
+        errors.push(`Product ${summary.id}: ${message}`)
+      } finally {
+        processed += 1
+        await printful.heartbeatSyncLog(input.sync_log_id, {
+          products_processed: processed,
+          products_total: toProcess.length,
+        })
+      }
+    }
 
-        // Pass the options wholesale rather than picking fields. Hand-building
-        // this object is how `onDiscontinued` was silently dropped: every field
-        // is optional, so omitting one is legal TypeScript and typecheck stayed
-        // green while the option did nothing. The mapper narrows internally.
-        const mapped = mapSyncProductToMedusa(detail, options)
+    return new StepResponse({
+      toProcess,
+      details: Array.from(detailsMap.entries()),
+      options,
+      storeId,
+      initialCounters: {
+        created: 0,
+        updated: 0,
+        failed,
+        errors,
+      } satisfies SyncCounters,
+    })
+  }
+)
 
-        // Design parameters, best-effort. Mutating `mapped.variants` in place
-        // means both the create and the update path below pick them up from
-        // the one object, so the two paths cannot drift apart. Every failure
-        // mode inside — a null answer, a missing catalog id, a throw — returns
-        // the variant untouched, so this can only ever add metadata.
+const mapToMedusaProductsStep = createStep(
+  {
+    name: "printful-map-products",
+    async: true,
+    backgroundExecution: true,
+  },
+  async (
+    input: {
+      sync_log_id: string
+      toProcess: PrintfulSyncProductSummary[]
+      details: [string, PrintfulSyncProductDetail][]
+      options: PrintfulPluginOptions
+      storeId: string
+      initialCounters: SyncCounters
+    },
+    { container }
+  ) => {
+    const printful: PrintfulModuleService = container.resolve(PRINTFUL_MODULE)
+    const productModule = container.resolve(Modules.PRODUCT)
+    const logger = container.resolve(ContainerRegistrationKeys.LOGGER)
+    const client = await printful.getClient()
+
+    const counters: SyncCounters = {
+      created: input.initialCounters.created,
+      updated: input.initialCounters.updated,
+      failed: input.initialCounters.failed,
+      errors: [...input.initialCounters.errors],
+    }
+
+    const detailsMap = new Map(input.details)
+    const catalogCache = new CatalogVariantCache((id) =>
+      client.getCatalogVariant(id)
+    )
+
+    const productsToCreate: CreateProductInput[] = []
+    const productsToUpdate: {
+      productId: string
+      data: Record<string, unknown>
+    }[] = []
+    const variantsToCreate: CreateVariantInput[] = []
+    const variantsToUpdate: UpdateVariantInput[] = []
+    const linksToCreate: { syncProductId: string }[] = []
+    const linksToUpdate: {
+      linkId: string
+      syncProductId: string
+      medusaProductId: string
+    }[] = []
+    const reconcileItems: {
+      syncProductId: string
+      medusaProductId?: string
+      syncVariantIds: number[]
+      isCreate: boolean
+    }[] = []
+    let processed = 0
+
+    for (const summary of input.toProcess) {
+      if (summary.is_ignored) continue
+      const detail = detailsMap.get(String(summary.id))
+      if (!detail) continue
+
+      try {
+        const mapped = mapSyncProductToMedusa(detail, input.options)
+
         mapped.variants = await enrichVariantsWithDesign(
           mapped.variants,
           detail.sync_variants,
@@ -141,10 +207,6 @@ const syncProductsStep = createStep(
         if (existingLink?.medusa_product_id) {
           const productId = existingLink.medusa_product_id
 
-          // Retrieved before the update so the current status and metadata are
-          // the merchant's, not ours. `mapped.status` is derived from Printful
-          // stock alone; writing it directly is what republished a product the
-          // merchant had deliberately drafted.
           const product = await productModule.retrieveProduct(productId, {
             relations: ["variants"],
           })
@@ -160,15 +222,16 @@ const syncProductsStep = createStep(
             mappedMetadata: mapped.metadata,
           })
 
-          // Update core product fields.
-          await productModule.updateProducts(productId, {
-            title: mapped.title,
-            thumbnail: mapped.thumbnail,
-            metadata: publication.metadata,
-            status: publication.status,
+          productsToUpdate.push({
+            productId,
+            data: {
+              title: mapped.title,
+              thumbnail: mapped.thumbnail,
+              metadata: publication.metadata,
+              status: publication.status,
+            },
           })
 
-          // Upsert variants so price/assortment changes in Printful reach Medusa.
           const { toCreate, toUpdate } = diffVariantsForUpsert(
             mapped.variants,
             (product.variants ?? []).map((pv) => ({
@@ -177,66 +240,41 @@ const syncProductsStep = createStep(
             }))
           )
 
-          if (toUpdate.length) {
-            await batchProductVariantsWorkflow(container).run({
-              input: {
-                update: toUpdate.map((u) => ({
-                  id: u.id,
-                  title: u.title,
-                  prices: u.prices,
-                  metadata: u.metadata,
-                })),
-              },
+          for (const u of toUpdate) {
+            variantsToUpdate.push({
+              id: u.id,
+              title: u.title,
+              prices: u.prices,
+              metadata: u.metadata,
             })
           }
 
-          if (toCreate.length) {
-            await batchProductVariantsWorkflow(container).run({
-              input: {
-                create: toCreate.map((c) => ({
-                  product_id: productId,
-                  title: c.title,
-                  sku: c.sku,
-                  options: c.options,
-                  prices: c.prices,
-                  metadata: c.metadata,
-                  manage_inventory: c.manage_inventory,
-                  allow_backorder: c.allow_backorder,
-                })),
-              },
+          for (const c of toCreate) {
+            variantsToCreate.push({
+              product_id: productId,
+              title: c.title,
+              sku: c.sku,
+              options: c.options,
+              prices: c.prices,
+              metadata: c.metadata,
+              manage_inventory: c.manage_inventory,
+              allow_backorder: c.allow_backorder,
             })
-            // No link loop here: the reconcile below re-reads the product, so
-            // these new variants are in its scope and get linked there.
           }
 
-          // Refresh existing variant links AND create any that are missing.
-          // Re-read the variants so freshly-created ones are in scope; the
-          // copy fetched for the diff predates the batch create above.
-          //
-          // The refresh-only loop this replaces could never repair a link row
-          // that failed to write, because `diffVariantsForUpsert` matches on
-          // variant metadata rather than link rows — so the variant looked
-          // already-synced and its row was never written again.
-          const linked = await productModule.retrieveProduct(productId, {
-            relations: ["variants"],
-          })
-          await reconcileVariantLinks(printful, {
-            storeId,
+          linksToUpdate.push({
+            linkId: existingLink.id,
             syncProductId: String(summary.id),
-            syncVariantIds: detail.sync_variants.map((v) => v.id),
-            medusaVariants: (linked.variants ?? []).map((pv) => ({
-              id: pv.id,
-              metadata: pv.metadata,
-            })),
+            medusaProductId: productId,
           })
 
-          await printful.updatePrintfulProductLinks({
-            id: existingLink.id,
-            last_synced_at: new Date(),
+          reconcileItems.push({
+            syncProductId: String(summary.id),
+            medusaProductId: productId,
+            syncVariantIds: detail.sync_variants.map((v) => v.id),
+            isCreate: false,
           })
-          counters.updated += 1
         } else {
-          // Ensure unique handle if collision
           let handle = mapped.handle
           try {
             const existing = await productModule.listProducts(
@@ -247,12 +285,9 @@ const syncProductsStep = createStep(
               handle = `${handle}-pf-${summary.id}`
             }
           } catch {
-            // ignore lookup errors
+            // ignore
           }
 
-          // A product created already sold out is drafted by the mapper, but
-          // the mapper writes no marker — so without this the restock path
-          // would read it as a merchant's own draft and never republish it.
           const createStock = planStockActions(detail.sync_variants)
           const createMetadata: Record<string, unknown> = {
             ...mapped.metadata,
@@ -261,175 +296,322 @@ const syncProductsStep = createStep(
               : {}),
           }
 
-          const { result } = await createProductsWorkflow(container).run({
-            input: {
-              products: [
-                {
-                  title: mapped.title,
-                  handle,
-                  status: mapped.status,
-                  thumbnail: mapped.thumbnail,
-                  images: mapped.images,
-                  options: mapped.options,
-                  variants: mapped.variants.map((v) => ({
-                    title: v.title,
-                    sku: v.sku,
-                    options: v.options,
-                    prices: v.prices,
-                    metadata: v.metadata,
-                    manage_inventory: v.manage_inventory,
-                    allow_backorder: v.allow_backorder,
-                  })),
-                  metadata: createMetadata,
-                  external_id: mapped.external_id,
-                },
-              ],
-            },
+          productsToCreate.push({
+            title: mapped.title,
+            handle,
+            status: mapped.status,
+            thumbnail: mapped.thumbnail,
+            images: mapped.images,
+            options: mapped.options,
+            variants: mapped.variants.map((v) => ({
+              title: v.title,
+              sku: v.sku,
+              options: v.options,
+              prices: v.prices,
+              metadata: v.metadata,
+              manage_inventory: v.manage_inventory,
+              allow_backorder: v.allow_backorder,
+            })),
+            metadata: createMetadata,
+            external_id: mapped.external_id,
           })
 
-          const created = result[0]
-          orphans.track(created.id)
-          pendingProductId = created.id
+          linksToCreate.push({ syncProductId: String(summary.id) })
 
-          await printful.createPrintfulProductLinks({
-            printful_store_id: storeId,
-            printful_sync_product_id: String(summary.id),
-            medusa_product_id: created.id,
-            last_synced_at: new Date(),
-          })
-
-          // Linked — no longer an orphan, and never to be deleted.
-          orphans.release(created.id)
-          pendingProductId = undefined
-
-          // Resumable rather than best-effort: a throw here used to abandon
-          // every remaining variant, and because the product link row above
-          // already exists, the next sync took the update path and never went
-          // back for them. Now one unwritable row costs only that row, and the
-          // next sync's reconcile picks it up.
-          await reconcileVariantLinks(printful, {
-            storeId,
+          reconcileItems.push({
             syncProductId: String(summary.id),
             syncVariantIds: detail.sync_variants.map((v) => v.id),
-            medusaVariants: (created.variants ?? []).map((variant) => ({
-              id: variant.id,
-              metadata: variant.metadata,
-            })),
+            isCreate: true,
           })
-
-          counters.created += 1
         }
       } catch (err) {
         counters.failed += 1
         const message = err instanceof Error ? err.message : String(err)
         counters.errors.push(`Product ${summary.id}: ${message}`)
-
-        // The product was created but its link write never landed. The loop
-        // continues and the step still SUCCEEDS, so compensation — which runs
-        // only on step failure — will never see this. Left alone it is a
-        // product stranded in Medusa with no link row: invisible to the next
-        // sync's findProductLink, which duplicates it.
-        if (pendingProductId) {
-          const orphanId = pendingProductId
-          try {
-            await productModule.deleteProducts([orphanId])
-            // Released only after a delete that actually happened, so a
-            // failure here still leaves it for the compensation to retry.
-            orphans.release(orphanId)
-          } catch (deleteErr) {
-            // Must not mask the original error — that is what gets reported.
-            logger.error(
-              `Printful sync: could not delete orphaned product ${orphanId} after a failed link write: ${
-                deleteErr instanceof Error
-                  ? deleteErr.message
-                  : String(deleteErr)
-              }`
-            )
-          }
-        }
       } finally {
-        pendingProductId = undefined
-        // In `finally` so it runs however the product exited — success, an
-        // early `continue`, or a throw. The heartbeat is what keeps the claim
-        // from being reaped, so a catalog of failures must not starve it.
         processed += 1
         await printful.heartbeatSyncLog(input.sync_log_id, {
           products_processed: processed,
-          products_total: toProcess.length,
+          products_total: input.toProcess.length,
         })
       }
     }
 
-    // Products that disappeared from Printful. Only a full catalogue pass may
-    // do this — a `limit` would treat everything beyond the page as removed.
-    // The decision lives in `shouldRunRemovalPass` so it is covered by a test:
-    // this is the one condition whose failure unpublishes a live catalogue.
-    {
-      const removalPolicy: OnRemovedFromPrintful =
-        options.onRemovedFromPrintful ?? "unpublish"
+    logger.info(
+      `Printful sync: ${catalogCache.calls} catalog variant call(s) for design parameters`
+    )
 
-      if (shouldRunRemovalPass({ policy: removalPolicy, limit: input.limit })) {
-        try {
-          const seenIds = summaries.map((s) => String(s.id))
-          // Include ignored Printful rows: they still exist in the store.
-          const links = await printful.listPrintfulProductLinks(
-            { printful_store_id: storeId },
-            { take: 100_000 }
-          )
-          const missing = findMissingSyncProductLinks(links, seenIds)
+    return new StepResponse({
+      productsToCreate,
+      productsToUpdate,
+      variantsToCreate,
+      variantsToUpdate,
+      linksToCreate,
+      linksToUpdate,
+      reconcileItems,
+      counters,
+      catalogCacheCalls: catalogCache.calls,
+    })
+  }
+)
 
-          for (const link of missing) {
-            try {
-              const product = await productModule.retrieveProduct(
-                link.medusa_product_id
-              )
-              const plan = planRemovedProductWrite({
-                policy: removalPolicy,
-                currentStatus:
-                  product.status === "published" ? "published" : "draft",
-                currentMetadata: (product.metadata ?? {}) as Record<
-                  string,
-                  unknown
-                >,
-              })
+const updateMedusaProductsStep = createStep(
+  "printful-update-medusa-products",
+  async (
+    productsToUpdate: { productId: string; data: Record<string, unknown> }[],
+    { container }
+  ) => {
+    const productModule = container.resolve(Modules.PRODUCT)
+    for (const update of productsToUpdate) {
+      await productModule.updateProducts(update.productId, update.data)
+    }
+    return new StepResponse(null)
+  }
+)
 
-              if (plan.action === "unpublish") {
-                await productModule.updateProducts(link.medusa_product_id, {
-                  status: plan.status,
-                  metadata: plan.metadata,
-                })
-                counters.updated += 1
-              }
-            } catch (err) {
-              counters.failed += 1
-              const message = err instanceof Error ? err.message : String(err)
-              counters.errors.push(
-                `Removed product ${link.printful_sync_product_id}: ${message}`
-              )
-            }
+const syncLinksStep = createStep(
+  "printful-sync-links",
+  async (
+    input: {
+      createdProducts: ProductDTO[]
+      linksToCreate: { syncProductId: string }[]
+      linksToUpdate: {
+        linkId: string
+        syncProductId: string
+        medusaProductId: string
+      }[]
+      reconcileItems: {
+        syncProductId: string
+        medusaProductId?: string
+        syncVariantIds: number[]
+        isCreate: boolean
+      }[]
+      storeId: string
+      counters: SyncCounters
+    },
+    { container }
+  ) => {
+    const printful: PrintfulModuleService = container.resolve(PRINTFUL_MODULE)
+    const productModule = container.resolve(Modules.PRODUCT)
+    const logger = container.resolve(ContainerRegistrationKeys.LOGGER)
 
-            await printful.heartbeatSyncLog(input.sync_log_id, {
-              products_processed: processed,
-              products_total: toProcess.length,
-            })
-          }
-        } catch (err) {
-          counters.failed += 1
-          const message = err instanceof Error ? err.message : String(err)
-          counters.errors.push(`Removal pass failed: ${message}`)
-          logger.error(`Printful sync removal pass failed: ${message}`)
+    const counters = {
+      created: input.counters.created,
+      updated: input.counters.updated,
+      failed: input.counters.failed,
+      errors: [...input.counters.errors],
+    }
+
+    const orphans = new OrphanTracker()
+
+    const createdBySyncId = new Map<string, ProductDTO>()
+    if (input.createdProducts && Array.isArray(input.createdProducts)) {
+      for (const cp of input.createdProducts) {
+        if (cp.external_id) {
+          createdBySyncId.set(cp.external_id, cp)
         }
       }
     }
 
-    // Bundles. They have no Printful product of their own, so the loop above
-    // never reaches them: nothing in `summaries` names a bundle. Without this
-    // pass a bundle stays on sale after a member sells out, and every order
-    // containing it fails at Printful.
-    //
-    // Only after a full pass, for the same reason the removal pass is gated: a
-    // `limit` leaves most members unrefreshed, and deciding availability from
-    // stale metadata would draft bundles on last week's stock.
+    for (const lc of input.linksToCreate) {
+      const created = createdBySyncId.get(lc.syncProductId)
+      if (!created) {
+        counters.failed += 1
+        counters.errors.push(
+          `Product ${lc.syncProductId} created but not found in output`
+        )
+        continue
+      }
+
+      orphans.track(created.id)
+
+      try {
+        await printful.createPrintfulProductLinks({
+          printful_store_id: input.storeId,
+          printful_sync_product_id: lc.syncProductId,
+          medusa_product_id: created.id,
+          last_synced_at: new Date(),
+        })
+        orphans.release(created.id)
+        counters.created += 1
+      } catch (err) {
+        counters.failed += 1
+        const message = err instanceof Error ? err.message : String(err)
+        counters.errors.push(`Product ${lc.syncProductId}: ${message}`)
+
+        try {
+          await productModule.deleteProducts([created.id])
+          orphans.release(created.id)
+        } catch (deleteErr) {
+          logger.error(
+            `Printful sync: could not delete orphaned product ${created.id} after a failed link write: ${
+              deleteErr instanceof Error ? deleteErr.message : String(deleteErr)
+            }`
+          )
+        }
+      }
+    }
+
+    for (const lu of input.linksToUpdate) {
+      try {
+        await printful.updatePrintfulProductLinks({
+          id: lu.linkId,
+          last_synced_at: new Date(),
+        })
+        counters.updated += 1
+      } catch (err) {
+        counters.failed += 1
+        const message = err instanceof Error ? err.message : String(err)
+        counters.errors.push(
+          `Product update link ${lu.syncProductId}: ${message}`
+        )
+      }
+    }
+
+    for (const item of input.reconcileItems) {
+      try {
+        const medusaProductId = item.isCreate
+          ? createdBySyncId.get(item.syncProductId)?.id
+          : item.medusaProductId
+
+        if (!medusaProductId) continue
+
+        const linked = await productModule.retrieveProduct(medusaProductId, {
+          relations: ["variants"],
+        })
+
+        await reconcileVariantLinks(printful, {
+          storeId: input.storeId,
+          syncProductId: item.syncProductId,
+          syncVariantIds: item.syncVariantIds,
+          medusaVariants: (linked.variants ?? []).map((pv) => ({
+            id: pv.id,
+            metadata: pv.metadata,
+          })),
+        })
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        logger.error(
+          `Failed to reconcile variant links for ${item.syncProductId}: ${message}`
+        )
+      }
+    }
+
+    return new StepResponse(
+      { counters, orphanProductIds: orphans.toDelete() },
+      { orphanProductIds: orphans.toDelete() }
+    )
+  },
+  async (
+    compensateInput: { orphanProductIds: string[] } | undefined,
+    { container }
+  ) => {
+    if (!compensateInput?.orphanProductIds?.length) {
+      return
+    }
+    const productModule = container.resolve(Modules.PRODUCT)
+    const logger = container.resolve(ContainerRegistrationKeys.LOGGER)
+
+    for (const id of compensateInput.orphanProductIds) {
+      try {
+        await productModule.deleteProducts([id])
+      } catch (err) {
+        logger.error(
+          `Printful sync rollback: could not delete orphaned product ${id}: ${
+            err instanceof Error ? err.message : String(err)
+          }`
+        )
+      }
+    }
+    logger.info(
+      `Printful sync rolled back ${compensateInput.orphanProductIds.length} orphaned product(s)`
+    )
+  }
+)
+
+const removalsAndBundlesStep = createStep(
+  {
+    name: "printful-removals-bundles",
+    async: true,
+    backgroundExecution: true,
+  },
+  async (
+    input: {
+      sync_log_id: string
+      limit?: number
+      storeId: string
+      options: PrintfulPluginOptions
+      summaries: PrintfulSyncProductSummary[]
+      counters: SyncCounters
+    },
+    { container }
+  ) => {
+    const printful: PrintfulModuleService = container.resolve(PRINTFUL_MODULE)
+    const productModule = container.resolve(Modules.PRODUCT)
+    const logger = container.resolve(ContainerRegistrationKeys.LOGGER)
+
+    const counters = {
+      created: input.counters.created,
+      updated: input.counters.updated,
+      failed: input.counters.failed,
+      errors: [...input.counters.errors],
+    }
+
+    const removalPolicy: OnRemovedFromPrintful =
+      input.options.onRemovedFromPrintful ?? "unpublish"
+
+    if (shouldRunRemovalPass({ policy: removalPolicy, limit: input.limit })) {
+      try {
+        const seenIds = input.summaries.map((s) => String(s.id))
+        const links = await printful.listPrintfulProductLinks(
+          { printful_store_id: input.storeId },
+          { take: 100_000 }
+        )
+        const missing = findMissingSyncProductLinks(links, seenIds)
+
+        for (const link of missing) {
+          try {
+            const product = await productModule.retrieveProduct(
+              link.medusa_product_id
+            )
+            const plan = planRemovedProductWrite({
+              policy: removalPolicy,
+              currentStatus:
+                product.status === "published" ? "published" : "draft",
+              currentMetadata: (product.metadata ?? {}) as Record<
+                string,
+                unknown
+              >,
+            })
+
+            if (plan.action === "unpublish") {
+              await productModule.updateProducts(link.medusa_product_id, {
+                status: plan.status,
+                metadata: plan.metadata,
+              })
+              counters.updated += 1
+            }
+          } catch (err) {
+            counters.failed += 1
+            const message = err instanceof Error ? err.message : String(err)
+            counters.errors.push(
+              `Removed product ${link.printful_sync_product_id}: ${message}`
+            )
+          }
+
+          await printful.heartbeatSyncLog(input.sync_log_id, {
+            products_processed: input.summaries.length,
+            products_total: input.summaries.length,
+          })
+        }
+      } catch (err) {
+        counters.failed += 1
+        const message = err instanceof Error ? err.message : String(err)
+        counters.errors.push(`Removal pass failed: ${message}`)
+        logger.error(`Printful sync removal pass failed: ${message}`)
+      }
+    }
+
     if (!input.limit) {
       try {
         const products = await productModule.listProducts(
@@ -471,9 +653,6 @@ const syncProductsStep = createStep(
           }
         }
       } catch (err) {
-        // Isolated like the removal pass: bundles are a small part of the
-        // catalogue, and failing to reconcile them must not fail a sync that
-        // otherwise imported every product correctly.
         counters.failed += 1
         const message = err instanceof Error ? err.message : String(err)
         counters.errors.push(`Bundle pass failed: ${message}`)
@@ -481,42 +660,7 @@ const syncProductsStep = createStep(
       }
     }
 
-    // The number to watch. If this ever approaches the variant count rather
-    // than the distinct product-and-colour count, the probe key has regressed.
-    logger.info(
-      `Printful sync: ${catalogCache.calls} catalog variant call(s) for design parameters`
-    )
-
-    return new StepResponse(counters, { orphanProductIds: orphans.toDelete() })
-  },
-  async (
-    compensateInput: { orphanProductIds: string[] } | undefined,
-    { container }
-  ) => {
-    if (!compensateInput?.orphanProductIds?.length) {
-      return
-    }
-
-    const productModule = container.resolve(Modules.PRODUCT)
-    const logger = container.resolve(ContainerRegistrationKeys.LOGGER)
-
-    // Delete through the product module so variants, prices, and images go
-    // with the product rather than being orphaned a second time.
-    for (const id of compensateInput.orphanProductIds) {
-      try {
-        await productModule.deleteProducts([id])
-      } catch (err) {
-        logger.error(
-          `Printful sync rollback: could not delete orphaned product ${id}: ${
-            err instanceof Error ? err.message : String(err)
-          }`
-        )
-      }
-    }
-
-    logger.info(
-      `Printful sync rolled back ${compensateInput.orphanProductIds.length} orphaned product(s)`
-    )
+    return new StepResponse(counters)
   }
 )
 
@@ -524,36 +668,109 @@ const finalizeSyncLogStep = createStep(
   "printful-finalize-sync-log",
   async (input: { logId: string; counters: SyncCounters }, { container }) => {
     const printful: PrintfulModuleService = container.resolve(PRINTFUL_MODULE)
-    const log = await printful.updatePrintfulSyncLogs({
-      id: input.logId,
-      status: planSyncLogStatus(input.counters),
-      finished_at: new Date(),
-      products_created: input.counters.created,
-      products_updated: input.counters.updated,
-      products_failed: input.counters.failed,
-      error_message:
-        input.counters.errors.length > 0
-          ? input.counters.errors.slice(0, 20).join("\n")
-          : null,
-    })
-
-    return new StepResponse(log)
+    const logger = container.resolve(ContainerRegistrationKeys.LOGGER)
+    try {
+      const status = planSyncLogStatus(input.counters)
+      const log = await printful.updatePrintfulSyncLogs({
+        id: input.logId,
+        status,
+        finished_at: new Date(),
+        products_created: input.counters.created,
+        products_updated: input.counters.updated,
+        products_failed: input.counters.failed,
+        error_message:
+          input.counters.errors.length > 0
+            ? input.counters.errors.slice(0, 20).join("\n")
+            : null,
+      })
+      logger.info(
+        `Printful sync completed with status ${status}: ` +
+          `${input.counters.created} created, ` +
+          `${input.counters.updated} updated, ` +
+          `${input.counters.failed} failed`
+      )
+      return new StepResponse(log)
+    } catch (err) {
+      logger.error(
+        `Printful sync could not finalize log ${input.logId}: ${
+          err instanceof Error ? err.message : String(err)
+        }`
+      )
+      throw err
+    }
   }
 )
 
 export const syncProductsWorkflow = createWorkflow(
   "printful-sync-products",
   (input: SyncProductsInput) => {
-    const counters = syncProductsStep(input)
-    const finalizeInput = transform({ input, counters }, (data) => ({
-      logId: data.input.sync_log_id,
-      counters: data.counters as SyncCounters,
-    }))
+    const fetchRes = fetchPrintfulProductsStep(input)
+
+    const mapRes = mapToMedusaProductsStep({
+      sync_log_id: input.sync_log_id,
+      toProcess: fetchRes.toProcess,
+      details: fetchRes.details,
+      options: fetchRes.options,
+      storeId: fetchRes.storeId,
+      initialCounters: fetchRes.initialCounters,
+    })
+
+    const createProductsInput = transform(
+      { productsToCreate: mapRes.productsToCreate },
+      (data) => ({
+        input: { products: data.productsToCreate },
+      })
+    )
+    const createdProducts =
+      createProductsWorkflow.runAsStep(createProductsInput)
+
+    updateMedusaProductsStep(mapRes.productsToUpdate)
+
+    const batchVariantsInput = transform(
+      {
+        variantsToCreate: mapRes.variantsToCreate,
+        variantsToUpdate: mapRes.variantsToUpdate,
+      },
+      (data) => ({
+        input: {
+          create: data.variantsToCreate,
+          update: data.variantsToUpdate,
+        },
+      })
+    )
+    batchProductVariantsWorkflow.runAsStep(batchVariantsInput)
+
+    const linkRes = syncLinksStep({
+      createdProducts,
+      linksToCreate: mapRes.linksToCreate,
+      linksToUpdate: mapRes.linksToUpdate,
+      reconcileItems: mapRes.reconcileItems,
+      storeId: fetchRes.storeId,
+      counters: mapRes.counters,
+    })
+
+    const finalCounters = removalsAndBundlesStep({
+      sync_log_id: input.sync_log_id,
+      limit: input.limit,
+      storeId: fetchRes.storeId,
+      options: fetchRes.options,
+      summaries: fetchRes.toProcess,
+      counters: linkRes.counters,
+    })
+
+    const finalizeInput = transform(
+      { input, counters: finalCounters },
+      (data) => ({
+        logId: data.input.sync_log_id,
+        counters: data.counters as SyncCounters,
+      })
+    )
+
     const finalLog = finalizeSyncLogStep(finalizeInput)
 
     return new WorkflowResponse({
       sync_log: finalLog,
-      counters,
+      counters: finalCounters,
     })
   }
 )

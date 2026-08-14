@@ -1,10 +1,11 @@
 import { readFileSync } from "fs"
 import { join } from "path"
 import { describe, expect, it } from "vitest"
-import {
+import PrintfulModuleServiceClass, {
   isUniqueViolation,
   lockKeyFor,
   MAX_WEBHOOK_ATTEMPTS,
+  MIN_WEBHOOK_SECRET_LENGTH,
   nextRetryDelayMs,
   PENDING_PRINTFUL_ORDER_ID,
 } from "../src/modules/printful/service"
@@ -116,29 +117,68 @@ describe("nextRetryDelayMs", () => {
 
 describe("lockKeyFor", () => {
   it("is stable for the same order id", () => {
-    expect(lockKeyFor("777")).toBe(lockKeyFor("777"))
+    expect(lockKeyFor("777")).toStrictEqual(lockKeyFor("777"))
   })
 
   it("differs across order ids", () => {
-    expect(lockKeyFor("777")).not.toBe(lockKeyFor("778"))
+    expect(lockKeyFor("777")).not.toStrictEqual(lockKeyFor("778"))
   })
 
-  it("fits in a 32-bit signed integer", () => {
+  it("fits in two 32-bit signed integers", () => {
     for (const id of ["1", "some-order", "999999999999", ""]) {
-      const key = lockKeyFor(id)
-      expect(Number.isInteger(key)).toBe(true)
-      expect(key).toBeGreaterThanOrEqual(-(2 ** 31))
-      expect(key).toBeLessThan(2 ** 31)
+      const keys = lockKeyFor(id)
+      expect(Array.isArray(keys)).toBe(true)
+      expect(keys.length).toBe(2)
+      for (const key of keys) {
+        expect(Number.isInteger(key)).toBe(true)
+        expect(key).toBeGreaterThanOrEqual(-(2 ** 31))
+        expect(key).toBeLessThan(2 ** 31)
+      }
     }
   })
 
   it("treats numeric and string forms of an id alike", () => {
-    expect(lockKeyFor("42")).toBe(lockKeyFor(42 as unknown as string))
+    expect(lockKeyFor("42")).toStrictEqual(lockKeyFor(42 as unknown as string))
   })
 })
 
 describe("MAX_WEBHOOK_ATTEMPTS", () => {
   it("caps retries at twenty", () => {
     expect(MAX_WEBHOOK_ATTEMPTS).toBe(20)
+  })
+})
+
+describe("webhookSecret validation", () => {
+  // The secret is the sole authentication for the public webhook endpoint, so
+  // a short one is a live weakness rather than a style problem. Refused at
+  // construction: failing at boot surfaces the misconfiguration while someone
+  // is watching, instead of leaving a guessable endpoint serving traffic.
+  const construct = (webhookSecret?: string) =>
+    new PrintfulModuleServiceClass(
+      {} as never,
+      {
+        apiToken: "t",
+        ...(webhookSecret === undefined ? {} : { webhookSecret }),
+      } as never
+    )
+
+  it("refuses a secret shorter than the minimum", () => {
+    expect(() => construct("short")).toThrow(/at least 32 characters/)
+  })
+
+  it("names the length it got, so the fix is obvious", () => {
+    expect(() => construct("short")).toThrow(/got 5/)
+  })
+
+  it("accepts one exactly at the minimum", () => {
+    // The boundary itself must pass: an off-by-one here rejects a secret that
+    // meets the documented rule.
+    expect(() => construct("a".repeat(MIN_WEBHOOK_SECRET_LENGTH))).not.toThrow()
+  })
+
+  it("allows the option to be omitted entirely", () => {
+    // Optional by design — a deployment that never registers a webhook is
+    // entitled to leave it unset, and must still boot.
+    expect(() => construct(undefined)).not.toThrow()
   })
 })

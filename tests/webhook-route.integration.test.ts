@@ -26,6 +26,7 @@ import PrintfulModuleServiceClass, {
 } from "../src/modules/printful/service"
 import type PrintfulModuleService from "../src/modules/printful/service"
 import { planOrderStateActions } from "../src/utils/order-state"
+import { PRINTFUL_WEBHOOK_RECEIVED } from "../src/utils/webhook-events"
 import { PrintfulClient } from "../src/utils/printful-client"
 import applyOrderStatusWorkflow from "../src/workflows/apply-order-status"
 
@@ -56,7 +57,9 @@ import applyOrderStatusWorkflow from "../src/workflows/apply-order-status"
  * tests/webhook-path.test.ts.
  */
 
-const WEBHOOK_SECRET = "integration-test-secret"
+// At least 32 characters: the module constructor rejects anything shorter, so
+// a short fixture would fail to bootstrap rather than fail an assertion.
+const WEBHOOK_SECRET = "integration-test-secret-0123456789"
 const DATABASE_URL =
   process.env.DATABASE_URL ?? "postgres://andy@localhost:5432/print2medusa_test"
 
@@ -127,6 +130,13 @@ function createResponse(): CapturedResponse {
 
 const loggedErrors: string[] = []
 
+/**
+ * Events the route emitted, so a test can assert the handoff happened rather
+ * than only that a row was written. The route emits and the subscriber runs
+ * the workflow, so without this the seam between them is untested.
+ */
+const emittedEvents: Array<{ name: string; data: unknown }> = []
+
 function createRequest(token: string, body: unknown) {
   return {
     params: { token },
@@ -135,6 +145,13 @@ function createRequest(token: string, body: unknown) {
       resolve(key: string) {
         if (key === PRINTFUL_MODULE) {
           return printful
+        }
+        if (key === Modules.EVENT_BUS) {
+          return {
+            emit: async (event: { name: string; data: unknown }) => {
+              emittedEvents.push(event)
+            },
+          }
         }
         if (key === ContainerRegistrationKeys.LOGGER) {
           return {
@@ -212,8 +229,9 @@ async function postWebhook(token: string, body: unknown) {
   await (
     webhookRoute as unknown as (req: unknown, res: unknown) => Promise<void>
   )(req, res)
-  // The route answers 200 and then fires the apply workflow without awaiting
-  // it. Yield so that fire-and-forget tail settles before assertions run.
+  // The route now emits on the Event Bus and awaits that before responding, so
+  // nothing is left in flight. The yield is kept because other tests in this
+  // file drive the apply workflow directly and rely on microtasks settling.
   await new Promise((resolve) => setImmediate(resolve))
   return res
 }
@@ -328,6 +346,7 @@ afterAll(async () => {
 
 beforeEach(async () => {
   loggedErrors.length = 0
+  emittedEvents.length = 0
   await pg.raw(`truncate table printful_webhook_event`)
   await pg.raw(`truncate table printful_order_link`)
 })
@@ -369,6 +388,109 @@ describe("POST /hooks/printful/:token", () => {
       printful_shipment_id: "5002",
       type: "package_shipped",
     })
+  })
+
+  it("hands the stored event to the subscriber via the Event Bus", async () => {
+    // The route stores the row and emits; the subscriber runs the workflow.
+    // Asserting only on the row would leave that seam untested — a typo in the
+    // event name would still store, still answer 200, and never apply.
+    const res = await postWebhook(
+      WEBHOOK_SECRET,
+      shippedPayload({ orderId: 1010, shipmentId: 5010 })
+    )
+
+    expect(res.statusCode).toBe(200)
+    expect(emittedEvents).toHaveLength(1)
+    expect(emittedEvents[0].name).toBe(PRINTFUL_WEBHOOK_RECEIVED)
+
+    const row = await pg.raw(
+      `select id from printful_webhook_event where printful_order_id = ?`,
+      ["1010"]
+    )
+    expect(emittedEvents[0].data).toEqual({ event_row_id: row.rows[0].id })
+  })
+
+  it("emits before answering, so a failure cannot escape the request", async () => {
+    // Ordering is the whole point of the fix. An emit placed after res.json()
+    // throws with the response already sent — an unhandled rejection Printful
+    // reads as success. Recording when each happened is the only way to see
+    // the ordering from outside; catching the error hides it either way.
+    const order: string[] = []
+    const res = createResponse()
+    const req = createRequest(
+      WEBHOOK_SECRET,
+      shippedPayload({ orderId: 1013, shipmentId: 5013 })
+    )
+
+    const originalResolve = req.scope.resolve
+    req.scope.resolve = (key: string) => {
+      if (key === Modules.EVENT_BUS) {
+        return {
+          emit: async (event: { name: string; data: unknown }) => {
+            order.push("emit")
+            emittedEvents.push(event)
+          },
+        }
+      }
+      return originalResolve(key)
+    }
+    const originalJson = res.json
+    res.json = (payload: unknown) => {
+      order.push("respond")
+      return originalJson(payload)
+    }
+
+    await (
+      webhookRoute as unknown as (r: unknown, s: unknown) => Promise<void>
+    )(req, res)
+
+    expect(order).toEqual(["emit", "respond"])
+  })
+
+  it("emits nothing for an event type it does not handle", async () => {
+    await postWebhook(WEBHOOK_SECRET, {
+      type: "order_updated",
+      data: { order: { id: 1011 } },
+    })
+
+    // Stored as ignored, so there is nothing for the subscriber to apply.
+    expect(emittedEvents).toEqual([])
+  })
+
+  it("still answers 200 when the Event Bus fails, and says so in the log", async () => {
+    // The durable row is already written and the retry job will pick it up, so
+    // a failed emit is not a failed webhook: asking Printful to redeliver an
+    // event we hold would create a duplicate for no gain. But it must not pass
+    // silently, and it must not throw after the response — which is what an
+    // emit placed after res.json() would do.
+    const res = createResponse()
+    const req = createRequest(
+      WEBHOOK_SECRET,
+      shippedPayload({ orderId: 1012, shipmentId: 5012 })
+    )
+    const originalResolve = req.scope.resolve
+    req.scope.resolve = (key: string) => {
+      if (key === Modules.EVENT_BUS) {
+        throw new Error("event bus is down")
+      }
+      return originalResolve(key)
+    }
+
+    await expect(
+      (webhookRoute as unknown as (r: unknown, s: unknown) => Promise<void>)(
+        req,
+        res
+      )
+    ).resolves.toBeUndefined()
+
+    expect(res.statusCode).toBe(200)
+    expect(loggedErrors.some((m) => m.includes("could not emit"))).toBe(true)
+
+    const rows = await pg.raw(
+      `select status from printful_webhook_event where printful_order_id = ?`,
+      ["1012"]
+    )
+    expect(rows.rows[0].status).toBe("received")
   })
 
   it("absorbs a redelivery into exactly one row", async () => {
