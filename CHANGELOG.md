@@ -1,5 +1,45 @@
 # Changelog
 
+## 0.9.5
+
+Follow-up to the 0.9.4 refactor: fixes a webhook handoff that could throw
+after the response, and repairs the integration suite it broke.
+
+### Fixed
+
+- **The Event Bus emit ran after `res.json()`.** A failure there — an
+  unresolvable bus, a broken transport — threw with the 200 already sent: an
+  unhandled rejection Printful reads as success, with nothing logged and the
+  event left for the retry job. It now emits before responding, inside a
+  `try`/`catch`.
+- **A failed emit no longer passes silently.** It logs and still answers 200:
+  the durable row is written and the retry job owns it, so asking Printful to
+  redeliver an event we already hold would only create a duplicate.
+- **The integration suite was red.** The new `webhookSecret` length check
+  rejected the test fixture at bootstrap, and the fake container had no
+  `event_bus` — six tests failed once the fixture was lengthened. `npm test`
+  stayed green throughout, which is why it went unnoticed: it does not run the
+  integration suite.
+
+### Added
+
+- **`PRINTFUL_WEBHOOK_RECEIVED`**, shared by the route and the subscriber. A
+  typo on either side used to be silent — stored, answered 200, never applied.
+- **Four tests over the webhook handoff**: the event is emitted with the stored
+  row id, emitted _before_ the response, not emitted for unhandled types, and a
+  bus failure still answers 200 while logging.
+- **Four tests over the secret check**, including the boundary at exactly 32
+  and the omitted-option case.
+
+### Changed
+
+- **`MIN_WEBHOOK_SECRET_LENGTH`** replaces the inline `32`, and the error now
+  names the length it received.
+- **The `lockKeyFor` docstring** described the 32-bit single-argument lock that
+  0.9.4 replaced with the 64-bit two-argument form.
+- **Removed `test-workflow.js`**, a debug scratch file that was not ignored and
+  would have shipped in the package.
+
 ## 0.9.4
 
 Closes a path where one paid order could be printed and shipped twice.

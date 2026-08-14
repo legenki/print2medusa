@@ -8,9 +8,11 @@ import {
   extractShipmentId,
   PRINTFUL_WEBHOOK_TYPES,
   verifyWebhookToken,
+  PRINTFUL_WEBHOOK_RECEIVED,
   type PrintfulWebhookPayload,
 } from "../../../../utils/webhook-events"
-import applyOrderStatusWorkflow from "../../../../workflows/apply-order-status"
+import { Modules } from "@medusajs/framework/utils"
+import type { IEventBusModuleService } from "@medusajs/framework/types"
 
 /**
  * Public Printful webhook endpoint.
@@ -81,20 +83,31 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     return
   }
 
-  res.status(200).json({ received: true, event_id: eventId })
-
   if (handled) {
-    // Fire-and-forget: the durable row plus the retry job (once it lands) are
-    // the intended safety net, so losing this in-process attempt costs at most
-    // one retry interval.
-    void applyOrderStatusWorkflow(req.scope)
-      .run({ input: { event_row_id: event.id } })
-      .catch((err) => {
-        logger.error(
-          `Printful: apply failed for event ${eventId}: ${
-            err instanceof Error ? err.message : String(err)
-          }`
-        )
+    // Emitted before the response, not after. Emitting afterwards means a
+    // failure here — an unresolvable Event Bus, a broken transport — throws
+    // with the 200 already sent: an unhandled rejection Printful reads as
+    // success, and the event waits for the retry job with nothing logged.
+    //
+    // Failing to emit is not failing the webhook, though. The durable row is
+    // already written and the retry job picks it up, so this logs and still
+    // answers 200 rather than asking Printful to redeliver an event we hold.
+    try {
+      const eventBus: IEventBusModuleService = req.scope.resolve(
+        Modules.EVENT_BUS
+      )
+      await eventBus.emit({
+        name: PRINTFUL_WEBHOOK_RECEIVED,
+        data: { event_row_id: event.id },
       })
+    } catch (err) {
+      logger.error(
+        `Printful: could not emit ${PRINTFUL_WEBHOOK_RECEIVED} for event ${eventId}: ${
+          err instanceof Error ? err.message : String(err)
+        }`
+      )
+    }
   }
+
+  res.status(200).json({ received: true, event_id: eventId })
 }

@@ -42,6 +42,14 @@ type BaseRepositoryLike = {
  */
 export const PENDING_PRINTFUL_ORDER_ID = "pending"
 
+/**
+ * Shortest webhook secret the module will start with.
+ *
+ * The secret is the sole authentication for the public webhook endpoint, so
+ * its length is what stands between a stranger and forged shipment events.
+ */
+export const MIN_WEBHOOK_SECRET_LENGTH = 32
+
 /** Attempts before an event is parked as permanently failed. */
 export const MAX_WEBHOOK_ATTEMPTS = 20
 
@@ -53,19 +61,21 @@ export function nextRetryDelayMs(attempts: number): number {
 }
 
 /**
- * Stable 32-bit key for pg_advisory_xact_lock, derived from the order id.
+ * Stable 64-bit key for pg_advisory_xact_lock, derived from the order id.
  *
- * readInt32BE yields a signed 32-bit integer, which is exactly the width
- * pg_advisory_xact_lock's single-argument form takes. The order id itself never
- * reaches SQL — only this number does, and it is passed as a bind parameter.
+ * Returned as two signed 32-bit halves because that is the shape the
+ * two-argument form takes — `pg_advisory_xact_lock(int4, int4)` — and
+ * readInt32BE yields exactly that width. The order id itself never reaches
+ * SQL; only these two numbers do, as bind parameters.
  *
- * 32 bits means distinct orders can collide (~2 per 200k ids). A collision
- * only serializes two unrelated orders against each other, which is slower
- * but never incorrect, so the simpler single-argument lock form is worth it.
+ * The single-argument form was 32 bits, where distinct orders collided at
+ * roughly 2 per 200k ids. A collision only serialized two unrelated orders,
+ * which is slower rather than wrong — but 64 bits makes it not worth thinking
+ * about, for one extra bind parameter.
  */
-export function lockKeyFor(printfulOrderId: string): number {
+export function lockKeyFor(printfulOrderId: string): [number, number] {
   const digest = createHash("sha256").update(String(printfulOrderId)).digest()
-  return digest.readInt32BE(0)
+  return [digest.readInt32BE(0), digest.readInt32BE(4)]
 }
 
 /**
@@ -131,6 +141,24 @@ class PrintfulModuleService extends MedusaService({
     // MedusaService multi-arg constructor
     super(...arguments)
     this.options_ = options ?? ({} as PrintfulPluginOptions)
+
+    // The secret is the whole authentication for the public webhook endpoint:
+    // it sits in the URL path and anyone who guesses it can post forged
+    // shipment events. Verification is already constant-time, so length is
+    // what remains — 32 characters puts brute force out of reach.
+    //
+    // Refused at construction rather than at the first request. A too-short
+    // secret is a misconfiguration, and failing at boot surfaces it while
+    // someone is watching, instead of leaving a weak endpoint live.
+    //
+    // Only checked when set: the option is optional, and a deployment that
+    // never registers a webhook is entitled to omit it.
+    const secret = this.options_.webhookSecret
+    if (secret !== undefined && secret.length < MIN_WEBHOOK_SECRET_LENGTH) {
+      throw new Error(
+        `Printful webhookSecret must be at least ${MIN_WEBHOOK_SECRET_LENGTH} characters (got ${secret.length}).`
+      )
+    }
   }
 
   async getOptions(): Promise<PrintfulPluginOptions> {
@@ -269,10 +297,10 @@ class PrintfulModuleService extends MedusaService({
     printfulOrderId: string,
     fn: () => Promise<T>
   ): Promise<T> {
-    const key = lockKeyFor(printfulOrderId)
+    const keys = lockKeyFor(printfulOrderId)
     return this.baseRepository_.transaction(
       async (txManager: SqlLikeManager) => {
-        await txManager.execute("select pg_advisory_xact_lock(?)", [key])
+        await txManager.execute("select pg_advisory_xact_lock(?, ?)", keys)
         return await fn()
       }
     )
