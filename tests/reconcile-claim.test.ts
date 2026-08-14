@@ -14,9 +14,7 @@ import { PrintfulApiError } from "../src/utils/errors"
 const ORDER_ID = "order_01JQ8ZK3M9XN2VWTB7YHRF"
 const CLAIM_ID = "pol_01"
 
-function harness(
-  clientImpl: { getOrderByExternalId: () => Promise<unknown> }
-) {
+function harness(clientImpl: { getOrderByExternalId: () => Promise<unknown> }) {
   const updates: Array<Record<string, unknown>> = []
   const deleted: string[] = []
   const errors: string[] = []

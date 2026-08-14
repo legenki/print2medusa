@@ -92,7 +92,10 @@ describe("isUnresolvedLink", () => {
 
   it("does not treat a finished link as unresolved", () => {
     expect(
-      isUnresolvedLink({ printful_order_id: "98765" }, PENDING_PRINTFUL_ORDER_ID)
+      isUnresolvedLink(
+        { printful_order_id: "98765" },
+        PENDING_PRINTFUL_ORDER_ID
+      )
     ).toBe(false)
   })
 

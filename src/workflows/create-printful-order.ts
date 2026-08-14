@@ -87,15 +87,15 @@ export async function reconcileClaim(args: {
     // The lookup itself failed, so the create's outcome is still unknown. Keep
     // the claim: a stalled order someone can see and fix is a smaller harm
     // than one printed and shipped twice. Record why, so it is findable.
-    const detail = lookupErr instanceof Error ? lookupErr.message : String(lookupErr)
+    const detail =
+      lookupErr instanceof Error ? lookupErr.message : String(lookupErr)
     await printful
       .updatePrintfulOrderLinks({
         id: claimId,
         status: "unverified",
-        error_message:
-          `create outcome unknown (${
-            cause instanceof Error ? cause.message : String(cause)
-          }); verification failed: ${detail}`.slice(0, 1000),
+        error_message: `create outcome unknown (${
+          cause instanceof Error ? cause.message : String(cause)
+        }); verification failed: ${detail}`.slice(0, 1000),
         last_attempt_at: new Date(),
       })
       .catch(() => {

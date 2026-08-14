@@ -14,6 +14,8 @@ import { POST as webhookRoute } from "../src/api/hooks/printful/[token]/route"
 import { PRINTFUL_MODULE } from "../src/modules/printful"
 import { Migration20260726000000 } from "../src/modules/printful/migrations/Migration20260726000000"
 import { Migration20260731000000 } from "../src/modules/printful/migrations/Migration20260731000000"
+import { Migration20260802000000 } from "../src/modules/printful/migrations/Migration20260802000000"
+import { Migration20260807000000 } from "../src/modules/printful/migrations/Migration20260807000000"
 import PrintfulOrderLink from "../src/modules/printful/models/printful-order-link"
 import PrintfulProductLink from "../src/modules/printful/models/printful-product-link"
 import PrintfulSyncLog from "../src/modules/printful/models/printful-sync-log"
@@ -63,10 +65,24 @@ type Pg = ReturnType<typeof createPgConnection>
 let pg: Pg
 let printful: PrintfulModuleService
 
+/**
+ * Every migration, oldest first — the order `medusa db:migrate` applies them.
+ *
+ * Listing them here rather than naming individual ones at the call site is
+ * deliberate: this list going stale means the schema under test stops matching
+ * the schema in production, and the failure surfaces as a confusing "column
+ * does not exist" in an unrelated assertion.
+ */
+const MIGRATIONS = [
+  Migration20260726000000,
+  Migration20260731000000,
+  Migration20260802000000,
+  Migration20260807000000,
+] as const
+
 /** Collect a migration's SQL without a MikroORM driver, then run it directly. */
 async function runMigration(
-  MigrationClass:
-    typeof Migration20260726000000 | typeof Migration20260731000000
+  MigrationClass: (typeof MIGRATIONS)[number]
 ): Promise<void> {
   const statements: string[] = []
   const migration = Object.create(MigrationClass.prototype) as {
@@ -243,8 +259,9 @@ async function countEvents(printfulOrderId: string): Promise<number> {
 beforeAll(async () => {
   pg = createPgConnection({ clientUrl: DATABASE_URL, schema: "public" })
 
-  await runMigration(Migration20260726000000)
-  await runMigration(Migration20260731000000)
+  for (const migration of MIGRATIONS) {
+    await runMigration(migration)
+  }
 
   const models = toMikroOrmEntities([
     PrintfulProductLink,

@@ -1,5 +1,78 @@
 # Changelog
 
+## 0.9.4
+
+Closes a path where one paid order could be printed and shipped twice.
+
+### Fixed
+
+- **A create whose outcome was unknown released its claim.** When
+  `POST /orders` threw, `create-printful-order` deleted the claim row and
+  rethrew so a retry could create the order. That is right only when the
+  request never reached Printful. A create that timed out _after_ Printful
+  accepted it is indistinguishable from the caller, and releasing the claim
+  there let the next `payment.captured` place a second order — the customer's
+  item printed and shipped twice, with the unique index on `medusa_order_id`
+  no longer able to stop it.
+
+The claim is now released only on an authoritative answer.
+
+| Failure                         | Outcome                               | Action                      |
+| ------------------------------- | ------------------------------------- | --------------------------- |
+| 4xx other than 429 and 409      | Printful rejected it                  | release; a retry may create |
+| 429, 5xx, timeout, socket error | unknown                               | ask Printful                |
+| 409                             | unknown — may be "external_id exists" | ask Printful                |
+
+When the outcome is unknown the order is looked up by `external_id`, the
+idempotency key already stamped on every order the plugin creates:
+
+- **found** — the order exists and only the response was lost. The claim is
+  completed with the real id and the step reports success rather than
+  rethrowing, which would mark a fulfilled order as failed.
+- **404** — an authoritative absence. Release the claim; a retry may create it.
+- **lookup failed** — still unknown. The claim is _held_, marked
+  `status: "unverified"` with the reason and `last_attempt_at`, and logged.
+
+Holding a claim stalls one order visibly and recoverably. Releasing it wrongly
+prints and ships a second one. The trade is deliberate.
+
+### 409 is not treated as a rejection
+
+On create it can mean an order with that `external_id` already exists — exactly
+the case where releasing the claim duplicates the order. It is classified as
+unknown so the lookup decides.
+
+### An outstanding claim no longer strands the order
+
+A link still holding the `pending` sentinel was reported as `already_linked`:
+nothing created the order, and nothing ever looked again. Such a link now
+reconciles instead. A second `POST /orders` is never issued while a claim is
+open.
+
+### Added
+
+- `PrintfulClient.getOrderByExternalId()`. The `@` prefix Printful requires is
+  applied inside the client, so a bare external id cannot reach `getOrder()`
+  and read a different order that happens to carry it as a numeric id.
+- `PrintfulApiError.provesNotCreated`, stating the release policy once.
+- `printful_order_link.error_message` and `.last_attempt_at`, with a partial
+  index on unresolved rows so a stalled claim is cheap to find.
+
+### `external_id` is validated before the claim
+
+Printful caps it at 32 characters. A Medusa order id — `order_` plus a
+26-character ULID — is exactly 32, with nothing to spare. A host app with a
+longer id now fails loudly before anything is created, rather than having the
+key silently truncated: a shortened key reads as a missing order and invites
+the duplicate it was meant to prevent.
+
+### Scopes
+
+Unchanged, and narrower than they may look. The plugin reads Printful products
+and never writes them, and never calls `/files` — file previews arrive inside
+the sync product response. A token needs only **view orders**, **manage
+orders**, **view products** and **manage webhooks**.
+
 ## 0.9.3
 
 Fixes a crash that made the entire Medusa admin fail to load.
