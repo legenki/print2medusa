@@ -10,3 +10,6 @@ node_modules
 
 # Lockfiles
 package-lock.json
+
+# Local tooling state, gitignored but still visible to Prettier.
+.sc
