@@ -1,5 +1,48 @@
 # Changelog
 
+## 0.9.6
+
+Tests and builds against Medusa 2.19.0. No change to the plugin's own code.
+
+### Changed
+
+- **Dev dependencies pinned to `@medusajs/*` 2.19.0** (and `@medusajs/ui`
+  4.2.1, which is what 2.19.0's dashboard ships). The pins are exact on
+  purpose — they say which version the suite actually ran against.
+- **Peer ranges are unchanged** at `^2.18.0`. They already admit 2.19.0, and
+  narrowing them would drop 2.18 hosts for no reason.
+
+### Why this release exists
+
+The plugin declares **no runtime dependencies** — `dependencies: {}` — so
+`npm audit --omit=dev` reports zero vulnerabilities both before and after.
+Nothing here reaches a host application. What it buys is that the suite now
+runs against the version stores are being upgraded to.
+
+### What 2.19.0 changes for this plugin
+
+One thing, and it is an improvement rather than a break:
+
+> fix(core-flows): pass the cart's currency and region to fulfillment providers
+> when calculating shipping option prices
+
+`calculatePrice` already reads `context.currency_code`, and refuses to quote
+rather than converting when it is absent. With 2.19.0 supplying it reliably,
+live Printful rates apply in carts that previously fell back.
+
+The 2.19.0 breaking changes do not reach here. The admin surface imports only
+`react`, `@medusajs/ui` and `@medusajs/admin-sdk`, and uses none of the removed
+APIs — `Response.json()`, `defer()`, `splitVendorChunkPlugin`, `UIMatch.data`.
+The removed `sdk.admin.product.*Option` methods were never called.
+
+### Reading the audit numbers after upgrading
+
+`npm audit` looks worse and is not: high goes from 19 to 72. 51 of those are
+Medusa packages whose severity was recomputed from the worst advisory in their
+chain, not new findings. Seven are genuinely resolved, including both
+`react-router` packages and `fast-uri`. All of it is devDependencies either
+way.
+
 ## 0.9.5
 
 Follow-up to the 0.9.4 refactor: fixes a webhook handoff that could throw
