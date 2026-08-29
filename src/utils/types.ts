@@ -34,6 +34,19 @@ export type PrintfulPluginOptions = {
    * Never deletes products. Skipped when the sync runs with `limit` (partial).
    */
   onRemovedFromPrintful?: "unpublish" | "ignore"
+  /**
+   * Per-attempt deadline for every Printful request, in ms. Default 15000.
+   *
+   * Node's fetch imposes no overall deadline, so a Printful that hangs rather
+   * than refuses would stall the caller for as long as it takes — multiplied
+   * by the retry count. That is survivable on a background sync and not on
+   * `validateFulfillmentData`, which runs inside the customer's own "add
+   * shipping method" request.
+   *
+   * Raise it only if a slow endpoint is genuinely expected to take longer;
+   * lowering it below a few seconds will start cancelling healthy calls.
+   */
+  timeoutMs?: number
 }
 
 export type PrintfulApiResponse<T> = {

@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.9.7
+
+Three-decimal currencies, a plumbed-through request deadline, and typed
+errors on the order path.
+
+### Fixed
+
+- **Dinars were scaled by 100 instead of 1000.** BHD, JOD, KWD, LYD, OMR and
+  TND carry three decimal places: 1 KWD is 1000 fils, so a price Medusa stores
+  as `1.234` is 1234 minor units, not 123. `minorUnitFactor` only ever asked
+  whether a currency was zero-decimal, so every amount in those six was stored
+  at a tenth of its value. Recorded as a known limit in 0.9.3; fixed here.
+- **`timeoutMs` was unreachable.** The client has had a 15s per-attempt
+  deadline since 0.7.0, but neither `getClient()` nor the fulfillment provider
+  passed the option through, so setting it in plugin options did nothing. Both
+  now forward it. This matters most for the provider: `calculatePrice` runs
+  inside the customer's own "add shipping method" request, so a hanging
+  Printful holds up checkout rather than a background job.
+
+### Changed
+
+- **The order path throws `MedusaError`** (`INVALID_DATA`) instead of bare
+  `Error` for a non-Printful item mix, a missing shipping address, and an
+  unusable `external_id`, matching the fulfillment provider and letting Medusa
+  classify them rather than surfacing them as unknown failures.
+- **Removed a duplicated `external_id` length check** in
+  `create-printful-order`. It sat two lines above `assertUsableExternalId`,
+  tested the same bound, and was weaker — length only, no character check.
+
+### Added
+
+- `THREE_DECIMAL_CURRENCIES` and `isThreeDecimalCurrency`, guarded by the same
+  two-way comparison against Medusa's `decimal_digits` that protects the
+  zero-decimal set, plus a test that no currency can be classified as both.
+
 ## 0.9.6
 
 Tests and builds against Medusa 2.19.0. No change to the plugin's own code.

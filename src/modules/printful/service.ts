@@ -175,6 +175,9 @@ class PrintfulModuleService extends MedusaService({
       this.client_ = new PrintfulClient({
         apiToken: this.options_.apiToken,
         storeId: this.options_.storeId,
+        // Undefined leaves the client on its own default; passing it through
+        // is what makes the plugin option have any effect at all.
+        timeoutMs: this.options_.timeoutMs,
       })
     }
     return this.client_

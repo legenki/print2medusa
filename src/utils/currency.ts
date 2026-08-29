@@ -71,10 +71,43 @@ export const ZERO_DECIMAL_CURRENCIES = new Set([
   "ZWL",
 ])
 
+/**
+ * Currencies with three decimal places rather than two.
+ *
+ * Dinars, mostly. 1 KWD is 1000 fils, so a price Medusa stores as 1.234
+ * is 1234 minor units — not 123, which is what scaling by 100 produces.
+ * Six currencies, and the same test that guards the zero-decimal set above
+ * compares this one against Medusa's `decimal_digits` in both directions.
+ */
+export const THREE_DECIMAL_CURRENCIES = new Set([
+  "BHD",
+  "JOD",
+  "KWD",
+  "LYD",
+  "OMR",
+  "TND",
+])
+
+/** True when the currency has three decimal places instead of two. */
+export function isThreeDecimalCurrency(
+  currencyCode: string | null | undefined
+): boolean {
+  if (!currencyCode) {
+    return false
+  }
+  return THREE_DECIMAL_CURRENCIES.has(currencyCode.toUpperCase())
+}
+
 export function minorUnitFactor(
   currencyCode: string | null | undefined
 ): number {
-  return isZeroDecimalCurrency(currencyCode) ? 1 : 100
+  if (isZeroDecimalCurrency(currencyCode)) {
+    return 1
+  }
+  if (isThreeDecimalCurrency(currencyCode)) {
+    return 1000
+  }
+  return 100
 }
 
 /**

@@ -4,7 +4,11 @@ import {
   StepResponse,
   WorkflowResponse,
 } from "@medusajs/framework/workflows-sdk"
-import { ContainerRegistrationKeys, Modules } from "@medusajs/framework/utils"
+import {
+  ContainerRegistrationKeys,
+  MedusaError,
+  Modules,
+} from "@medusajs/framework/utils"
 import { PRINTFUL_MODULE } from "../modules/printful"
 import type PrintfulModuleService from "../modules/printful/service"
 import { PENDING_PRINTFUL_ORDER_ID } from "../modules/printful/service"
@@ -243,14 +247,18 @@ const createPrintfulOrderStep = createStep(
     }
 
     if (unresolved.length && !options.allowPartialOrders) {
-      throw new Error(
+      throw new MedusaError(
+        MedusaError.Types.INVALID_DATA,
         `Order ${input.order_id} has non-Printful items: ${unresolved.join(", ")}`
       )
     }
 
     const addr = order.shipping_address
     if (!addr) {
-      throw new Error(`Order ${input.order_id} has no shipping address`)
+      throw new MedusaError(
+        MedusaError.Types.INVALID_DATA,
+        `Order ${input.order_id} has no shipping address`
+      )
     }
 
     const countryCode = (addr.country_code || "").toUpperCase()
@@ -266,12 +274,6 @@ const createPrintfulOrderStep = createStep(
       zip: addr.postal_code || "",
       phone: addr.phone || undefined,
       email: order.email || undefined,
-    }
-
-    if (order.id.length > 32) {
-      throw new Error(
-        `Order ID ${order.id} is too long (${order.id.length} chars) to be used as a Printful external_id (max 32).`
-      )
     }
 
     // Checked before the claim, not after: `external_id` is what makes a

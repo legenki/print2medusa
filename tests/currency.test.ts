@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest"
 import {
-  minorUnitFactor,
-  isZeroDecimalCurrency,
+  THREE_DECIMAL_CURRENCIES,
   ZERO_DECIMAL_CURRENCIES as ZERO_DECIMAL_FOR_TEST,
+  isThreeDecimalCurrency,
+  isZeroDecimalCurrency,
+  minorUnitFactor,
 } from "../src/utils/currency"
 
 describe("isZeroDecimalCurrency", () => {
@@ -118,5 +120,58 @@ describe("the built-in list against Medusa's own table", () => {
       (code) => !knownEverywhere.has(code)
     )
     expect(strangers).toEqual([])
+  })
+})
+
+describe("three-decimal currencies", () => {
+  it("scales dinars by 1000, not 100", () => {
+    // 1 KWD is 1000 fils. Scaling by 100 stores a tenth of the price.
+    for (const code of ["BHD", "JOD", "KWD", "LYD", "OMR", "TND"]) {
+      expect(minorUnitFactor(code)).toBe(1000)
+      expect(minorUnitFactor(code.toLowerCase())).toBe(1000)
+    }
+  })
+
+  it("leaves ordinary and zero-decimal currencies alone", () => {
+    expect(minorUnitFactor("USD")).toBe(100)
+    expect(minorUnitFactor("EUR")).toBe(100)
+    expect(minorUnitFactor("JPY")).toBe(1)
+    expect(minorUnitFactor("ISK")).toBe(1)
+  })
+
+  it("agrees with Medusa on which currencies have three decimals", async () => {
+    // Same guard as the zero-decimal set: the list is hand-written because the
+    // import cannot reach the browser, so a test compares it to Medusa's own
+    // table rather than trusting whoever edits it next.
+    const { defaultCurrencies } = await import("@medusajs/framework/utils")
+
+    const disagreements = Object.entries(defaultCurrencies)
+      .filter(
+        ([code, entry]) =>
+          isThreeDecimalCurrency(code) !== (entry.decimal_digits === 3)
+      )
+      .map(([code]) => code)
+
+    expect(disagreements).toEqual([])
+  })
+
+  it("holds no code Medusa does not consider three-decimal", async () => {
+    const { defaultCurrencies } = await import("@medusajs/framework/utils")
+
+    const known = new Set(
+      Object.entries(defaultCurrencies)
+        .filter(([, entry]) => entry.decimal_digits === 3)
+        .map(([code]) => code)
+    )
+
+    const invented = [...THREE_DECIMAL_CURRENCIES].filter((c) => !known.has(c))
+    expect(invented).toEqual([])
+  })
+
+  it("cannot classify a currency as both zero- and three-decimal", async () => {
+    const overlap = [...THREE_DECIMAL_CURRENCIES].filter((c) =>
+      isZeroDecimalCurrency(c)
+    )
+    expect(overlap).toEqual([])
   })
 })

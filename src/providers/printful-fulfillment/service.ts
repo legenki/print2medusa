@@ -139,6 +139,10 @@ class PrintfulFulfillmentProviderService extends AbstractFulfillmentProviderServ
     this.client_ = new PrintfulClient({
       apiToken: this.options_.apiToken || "",
       storeId: this.options_.storeId,
+      // This provider is the reason the deadline exists: `calculatePrice`
+      // runs inside the customer's own "add shipping method" request, so a
+      // hanging Printful would hold up checkout rather than a background job.
+      timeoutMs: this.options_.timeoutMs,
     })
   }
 

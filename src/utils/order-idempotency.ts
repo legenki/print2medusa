@@ -1,3 +1,4 @@
+import { MedusaError } from "@medusajs/framework/utils"
 import { PrintfulApiError } from "./errors"
 
 /**
@@ -25,17 +26,22 @@ const EXTERNAL_ID_ALLOWED = /^[A-Za-z0-9_-]+$/
  */
 export function assertUsableExternalId(orderId: string): void {
   if (!orderId) {
-    throw new Error("Printful external_id: order id is empty")
+    throw new MedusaError(
+      MedusaError.Types.INVALID_DATA,
+      "Printful external_id: order id is empty"
+    )
   }
   if (orderId.length > PRINTFUL_EXTERNAL_ID_MAX) {
-    throw new Error(
+    throw new MedusaError(
+      MedusaError.Types.INVALID_DATA,
       `Printful external_id accepts at most ${PRINTFUL_EXTERNAL_ID_MAX} ` +
         `characters; order id "${orderId}" is ${orderId.length}. Refusing to ` +
         `truncate — a shortened key cannot identify the order on retry.`
     )
   }
   if (!EXTERNAL_ID_ALLOWED.test(orderId)) {
-    throw new Error(
+    throw new MedusaError(
+      MedusaError.Types.INVALID_DATA,
       `Printful external_id accepts letters, digits, "-" and "_" only; ` +
         `order id "${orderId}" does not qualify.`
     )
