@@ -5,7 +5,7 @@ From catalog sync to a complete Printful backend.
 Each release closes one coherent Printful capability and leaves the plugin in a
 working state. The testing strategy tightens as the API surface grows.
 
-Sixteen releases so far, `0.1.0` through `0.9.6`. Six of them — `0.5.1`,
+Eighteen releases so far, `0.1.0` through `0.9.8`. Six of them — `0.5.1`,
 `0.5.2`, `0.5.3`, `0.9.3`, `0.9.4` and `0.9.5` — exist because a defect was
 found in shipped code; what they fixed is recorded in `CHANGELOG.md` rather
 than quietly amended.
@@ -14,10 +14,10 @@ than quietly amended.
 
 |                   |                                                                      |
 | ----------------- | -------------------------------------------------------------------- |
-| Published version | `0.9.6`                                                              |
+| Published version | `0.9.8`                                                              |
 | Tests             | unit (`npm test`) + integration (`test:integration`, needs Postgres) |
 | Printful API used | store products, catalog, orders, shipping rates, webhooks, reports   |
-| Peer range        | `@medusajs/*` `^2.18.0` (tested against 2.19.0)                      |
+| Peer range        | `@medusajs/*` `^2.18.0` (tested against 2.21.1)                      |
 
 The plugin covers products, orders, order cancellation, webhook configuration,
 order status, live shipping rates, stock-driven publication, removal from

@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.9.8
+
+Tests and builds against Medusa 2.21.1. No change to the plugin's own code.
+
+### Changed
+
+- **Dev dependencies pinned to `@medusajs/*` 2.21.1** (and `@medusajs/ui`
+  4.2.5, which is what 2.21.1's dashboard ships). Exact, as before: they
+  record which version the suite ran against.
+- **Peer ranges are unchanged** at `^2.18.0`.
+
+### Why this release exists
+
+Stores are moving to 2.21 for its Store API hardening, and the suite should
+run against what they run. `dependencies` is still `{}`, so
+`npm audit --omit=dev` reports zero before and after; the dev-only count goes
+from 84 to 81.
+
+Verified: typecheck (source and tests), 518 unit tests, 31 integration tests
+against Postgres, lint (0 errors, 13 warnings from pre-existing rules), format
+and the build all pass on 2.21.1.
+
+### What 2.20 and 2.21 change for this plugin
+
+- **Store API field limits (2.20 relation depth, 2.21 strict `allowed`
+  lists)** do not reach here. Every route the plugin adds is under
+  `/admin/printful` or the webhook at `/hooks/printful/:token`; it defines no
+  Store route and requests no Store fields.
+- **New `@medusajs/eslint-plugin` workflow rules** (`no-nested-when-then`,
+  `missing-when-name`, `throw-in-workflow-definition`) report nothing.
+- **Calculated shipping in draft orders (2.20).** Medusa now calls
+  `calculatePrice` when an operator adds a calculated shipping option to a
+  draft order, but that context carries no `currency_code`. `selectRate`
+  refuses a quote it cannot match to a currency, so draft orders get the flat
+  fallback (`currency_mismatch`) rather than a live rate — after one Printful
+  rate request. Nothing throws and checkout is unaffected. A host can supply
+  the currency through the new `setCalculatedShippingPricingContext` hook.
+
 ## 0.9.7
 
 Three-decimal currencies, a plumbed-through request deadline, and typed
