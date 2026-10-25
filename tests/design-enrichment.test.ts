@@ -394,3 +394,27 @@ describe("enrichVariantsWithDesign", () => {
     expect(second.colorHex).toBe("#008db5")
   })
 })
+
+describe("CatalogVariantCache concurrency", () => {
+  it("never has more than a few catalog calls in flight", async () => {
+    // A tee in 84 colours used to fire 84 catalog requests at once — straight
+    // into Printful's rate limiter, and every 429 cached as a blank.
+    let inFlight = 0
+    let peak = 0
+    const get = vi.fn(async () => {
+      inFlight += 1
+      peak = Math.max(peak, inFlight)
+      await new Promise((r) => setTimeout(r, 1))
+      inFlight -= 1
+      return null
+    })
+    const cache = new CatalogVariantCache(get, { maxConcurrent: 3 })
+
+    await Promise.all(
+      Array.from({ length: 20 }, (_, i) => cache.get(`k${i}`, i + 1))
+    )
+
+    expect(get).toHaveBeenCalledTimes(20)
+    expect(peak).toBeLessThanOrEqual(3)
+  })
+})

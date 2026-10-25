@@ -27,24 +27,24 @@ export default async function syncPrintfulProductsJob(
     return
   }
 
-  logger.info("Printful scheduled sync starting")
+  logger.info(`Printful scheduled sync ${claim.id} starting`)
   try {
-    // Awaited on purpose, unlike the admin route in
-    // src/api/admin/printful/sync/route.ts. That route must answer 202 without
-    // waiting for a 500-product catalog; this job serves no HTTP response, and
-    // awaiting is what gives it counters worth logging.
-    const { result } = await syncProductsWorkflow(container).run({
+    // The workflow's steps run in the background, so `run` returns once it is
+    // under way — not when it finishes, and with no counters to report. The
+    // workflow logs its own outcome when it finalizes the sync log, and marks
+    // the log failed if any step throws.
+    await syncProductsWorkflow(container).run({
       input: { sync_log_id: claim.id },
     })
-    logger.info(
-      `Printful scheduled sync done: created=${result.counters.created} updated=${result.counters.updated} failed=${result.counters.failed}`
-    )
   } catch (err) {
     logger.error(
-      `Printful scheduled sync failed: ${
+      `Printful scheduled sync ${claim.id} failed to start: ${
         err instanceof Error ? err.message : String(err)
       }`
     )
+    await printful
+      .failRunningSyncLog(claim.id, "workflow_failed_to_start")
+      .catch(() => undefined)
   }
 }
 

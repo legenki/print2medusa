@@ -219,9 +219,9 @@ export function slugify(value: string): string {
 /**
  * Printful's decimal price string to Medusa minor units.
  *
- * The factor is the currency's: a JPY store quoting "1500" means ¥1500, which
- * Medusa stores as 1500, not 150000. An absent or unrecognized currency scales
- * by 100 — the behaviour every caller had before currency was threaded here.
+ * Only for amounts this plugin keeps for itself (order cost metadata). Medusa
+ * v2 does NOT store minor units — see `parsePriceToAmount` for anything that
+ * becomes a Medusa price.
  */
 export function parsePriceToMinorUnits(
   price: string | null | undefined,
@@ -238,18 +238,57 @@ export function parsePriceToMinorUnits(
 }
 
 /**
- * Markup is a ratio, so it is unit-agnostic and needs no currency: 1500 JPY
- * minor units plus 30% is 1950 JPY minor units, the same arithmetic that turns
- * 1500 cents into 1950 cents. It must run on an already-converted amount.
+ * Round a main-unit amount to the precision its currency actually has.
+ *
+ * Done through the minor-unit integer so binary float noise cannot survive:
+ * 19.99 * 1.15 is 22.988499999999998, which rounds to 22.99 here.
+ */
+export function roundToCurrency(
+  amount: number,
+  currencyCode?: string | null
+): number {
+  const factor = minorUnitFactor(currencyCode)
+  return Math.round(amount * factor) / factor
+}
+
+/**
+ * Printful's decimal price string to a Medusa amount.
+ *
+ * Medusa v2 stores money in the currency's main unit, as-is: $25.00 is `25`,
+ * ¥1500 is `1500`. The admin formats `amount` without dividing, and payment
+ * providers scale it up to the smallest unit themselves (Stripe's
+ * `getSmallestUnit`). Writing cents here priced a $25 tee at $2500.
+ *
+ * Rounded to the currency's own precision so a stray "25.005" cannot become
+ * a price no customer can pay exactly.
+ */
+export function parsePriceToAmount(
+  price: string | null | undefined,
+  currencyCode?: string | null
+): number {
+  if (!price) {
+    return 0
+  }
+  const n = Number.parseFloat(price)
+  if (!Number.isFinite(n)) {
+    return 0
+  }
+  return roundToCurrency(n, currencyCode)
+}
+
+/**
+ * Markup is a ratio, so it applies to a main-unit amount directly; the result
+ * is rounded to the currency's precision — whole yen, cents, or fils.
  */
 export function applyMarkup(
-  amountMinor: number,
-  markupPercent?: number
+  amount: number,
+  markupPercent?: number,
+  currencyCode?: string | null
 ): number {
   if (!markupPercent || markupPercent === 0) {
-    return amountMinor
+    return amount
   }
-  return Math.round(amountMinor * (1 + markupPercent / 100))
+  return roundToCurrency(amount * (1 + markupPercent / 100), currencyCode)
 }
 
 function optionValuesFromVariants(variants: PrintfulSyncVariant[]): {
@@ -378,8 +417,8 @@ export function mapSyncProductToMedusa(
   const variants: MedusaVariantInput[] = sync_variants.map((v, i) => {
     // `currency` is the same code these prices are stored under, so the scale
     // factor and the `currency_code` below can never disagree.
-    const base = parsePriceToMinorUnits(v.retail_price, currency)
-    const amount = applyMarkup(base, options.markupPercent)
+    const base = parsePriceToAmount(v.retail_price, currency)
+    const amount = applyMarkup(base, options.markupPercent, currency)
     return {
       title: v.name,
       sku: v.sku || `pf-${v.id}`,

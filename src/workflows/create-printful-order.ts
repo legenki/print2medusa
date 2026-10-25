@@ -22,6 +22,7 @@ import { PrintfulApiError } from "../utils/errors"
 import {
   assertUsableExternalId,
   classifyCreateFailure,
+  classifyPendingClaim,
   isUnresolvedLink,
 } from "../utils/order-idempotency"
 import { resolveStateCode } from "../utils/mappers"
@@ -147,6 +148,17 @@ const createPrintfulOrderStep = createStep(
       })
     }
 
+    if (existing && classifyPendingClaim(existing) === "in_flight") {
+      // Another run claimed this order moments ago and may be mid-POST.
+      // Settling now would read 404 before its order lands, delete its claim,
+      // and race it with a second create. The order sweep picks the claim up
+      // if that run never finishes.
+      return new StepResponse<CreateResult>({
+        skipped: true,
+        reason: "create_in_progress",
+      })
+    }
+
     if (existing) {
       // Recovery, not a second create: a claim is outstanding, so ask Printful
       // whether the earlier attempt landed rather than POSTing again.
@@ -184,6 +196,15 @@ const createPrintfulOrderStep = createStep(
       // Printful confirmed the method the customer paid for.
       relations: ["items", "shipping_address", "shipping_methods"],
     })
+
+    // Recovery runs long after checkout, from the order sweep. An order the
+    // merchant has since canceled must not be printed and shipped.
+    if (order.status === "canceled") {
+      return new StepResponse<CreateResult>({
+        skipped: true,
+        reason: "order_canceled",
+      })
+    }
 
     const items: PrintfulOrderItemInput[] = []
     const unresolved: string[] = []

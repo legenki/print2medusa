@@ -12,7 +12,7 @@ import {
   Text,
   toast,
 } from "@medusajs/ui"
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 
 type SyncRow = {
   id: string
@@ -156,22 +156,36 @@ const PrintfulPage = () => {
   const [loading, setLoading] = useState(true)
   const [clearing, setClearing] = useState(false)
 
+  // Sync history alone — what the progress poll needs. Kept apart from `load`
+  // so a running sync re-reads one cheap local table every few seconds rather
+  // than all five panels, one of which calls Printful live and competes with
+  // the very sync being watched for the same rate limit.
+  const loadSyncs = useCallback(async () => {
+    try {
+      const res = await fetch("/admin/printful/history", {
+        credentials: "include",
+      })
+      if (res.ok) {
+        const body = await res.json()
+        setSyncs(body.syncs ?? [])
+      }
+    } catch {
+      // Same rule as every panel: a dead endpoint leaves its section as is.
+    }
+  }, [])
+
   const load = useCallback(async () => {
     // Each panel is fetched independently and failures are swallowed per
     // panel: this is the screen an owner opens *because* something is wrong,
     // so one dead endpoint must not blank the other two.
-    const [h, w, s, d, b] = await Promise.allSettled([
-      fetch("/admin/printful/history", { credentials: "include" }),
+    const [, w, s, d, b] = await Promise.allSettled([
+      loadSyncs(),
       fetch("/admin/printful/health", { credentials: "include" }),
       fetch("/admin/printful/statistics", { credentials: "include" }),
       fetch("/admin/printful/design", { credentials: "include" }),
       fetch("/admin/printful/bundles", { credentials: "include" }),
     ])
 
-    if (h.status === "fulfilled" && h.value.ok) {
-      const body = await h.value.json()
-      setSyncs(body.syncs ?? [])
-    }
     if (w.status === "fulfilled" && w.value.ok) {
       setHealth(await w.value.json())
     }
@@ -188,7 +202,7 @@ const PrintfulPage = () => {
       setBundles(body.bundles ?? [])
     }
     setLoading(false)
-  }, [])
+  }, [loadSyncs])
 
   const loadPrompts = useCallback(async () => {
     const params = new URLSearchParams({ style })
@@ -219,19 +233,32 @@ const PrintfulPage = () => {
   // the admin is typing, and the sync poll runs every three seconds — sharing
   // a fetch would rebuild the list under the cursor.
   useEffect(() => {
-    void loadPrompts()
+    // Debounced: `artwork` changes on every keystroke, and each request reads
+    // the whole catalogue.
+    const t = setTimeout(() => void loadPrompts(), 400)
+    return () => clearTimeout(t)
   }, [loadPrompts])
 
   const latest = syncs[0]
   const running = latest?.status === "running"
 
-  // Poll only while a sync is running, so an idle page costs nothing.
+  // Poll only while a sync is running, so an idle page costs nothing — and
+  // poll only the sync history. The other panels are refreshed once, when the
+  // sync finishes, since that is when their answers change.
   useEffect(() => {
     if (!running) {
       return
     }
-    const t = setInterval(() => void load(), 3000)
+    const t = setInterval(() => void loadSyncs(), 3000)
     return () => clearInterval(t)
+  }, [running, loadSyncs])
+
+  const wasRunning = useRef(false)
+  useEffect(() => {
+    if (wasRunning.current && !running) {
+      void load()
+    }
+    wasRunning.current = running
   }, [running, load])
 
   const clearStuck = async () => {

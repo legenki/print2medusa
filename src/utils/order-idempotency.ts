@@ -76,3 +76,49 @@ export function isUnresolvedLink(
 ): boolean {
   return !!link && (link.printful_order_id ?? "") === pendingSentinel
 }
+
+/**
+ * How long a fresh claim is presumed to belong to a create still in progress.
+ *
+ * A claim is written immediately before `POST /orders`, so for the length of
+ * that call it looks exactly like one abandoned by a crash. Settling it then —
+ * looking the order up, getting 404 because the POST has not landed yet, and
+ * deleting the claim — hands the order to a second create running alongside.
+ * That is the normal case on a capture-on-place store, where `order.placed`
+ * and `payment.captured` arrive together.
+ *
+ * Ten minutes is far beyond one create (never retried, 15s deadline) plus its
+ * reconcile lookup. Anything older is a crash, and the order sweep settles it.
+ */
+export const CLAIM_IN_FLIGHT_MS = 10 * 60 * 1000
+
+export type PendingClaimState =
+  /** A create may be running right now; leave the claim alone. */
+  | "in_flight"
+  /** No create can still own this claim; ask Printful what became of it. */
+  | "settle"
+
+/**
+ * Decide whether an unresolved claim may be reconciled now.
+ *
+ * `last_attempt_at` is stamped only when an attempt ended without an answer,
+ * so its presence alone proves no create still holds the claim. Without it,
+ * age is the only evidence — and an unreadable timestamp is treated as old,
+ * because a claim nothing can ever settle is worse than one settled late.
+ */
+export function classifyPendingClaim(
+  link: {
+    created_at?: Date | string | null
+    last_attempt_at?: Date | string | null
+  },
+  now: number = Date.now()
+): PendingClaimState {
+  if (link.last_attempt_at) {
+    return "settle"
+  }
+  const created = link.created_at ? new Date(link.created_at).getTime() : NaN
+  if (!Number.isFinite(created)) {
+    return "settle"
+  }
+  return now - created < CLAIM_IN_FLIGHT_MS ? "in_flight" : "settle"
+}

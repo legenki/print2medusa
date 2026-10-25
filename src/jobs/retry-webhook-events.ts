@@ -9,9 +9,10 @@ import applyOrderStatusWorkflow from "../workflows/apply-order-status"
  * the order link had not been written yet when the webhook landed, or because
  * the process died between storing the event and applying it.
  *
- * This is the safety net the webhook route's fire-and-forget dispatch relies on:
- * the route's in-process attempt is only an optimization to avoid waiting a
- * retry interval in the common case.
+ * This is the safety net behind the webhook route's Event Bus emit: the
+ * subscriber's immediate attempt is only an optimization to avoid waiting a
+ * retry interval in the common case, and an emit or subscriber failure leaves
+ * the stored row for this sweep.
  */
 /** Events drained per sweep. */
 const BATCH_SIZE = 50

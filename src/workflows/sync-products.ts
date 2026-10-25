@@ -9,7 +9,11 @@ import {
   batchProductVariantsWorkflow,
   createProductsWorkflow,
 } from "@medusajs/medusa/core-flows"
-import { ContainerRegistrationKeys, Modules } from "@medusajs/framework/utils"
+import {
+  ContainerRegistrationKeys,
+  MedusaError,
+  Modules,
+} from "@medusajs/framework/utils"
 import { PRINTFUL_MODULE } from "../modules/printful"
 import type PrintfulModuleService from "../modules/printful/service"
 import { diffVariantsForUpsert, mapSyncProductToMedusa } from "../utils/mappers"
@@ -29,6 +33,8 @@ import {
 } from "../utils/removed"
 import { CatalogVariantCache, enrichVariantsWithDesign } from "../utils/design"
 import { planBundlePass, type ProductForBundlePass } from "../utils/bundle"
+import { resolveProductPlacement } from "../utils/placement"
+import { listAllProducts } from "../utils/list-products"
 import type {
   PrintfulSyncProductSummary,
   PrintfulSyncProductDetail,
@@ -60,6 +66,53 @@ type UpdateVariantInput = NonNullable<
     Parameters<typeof batchProductVariantsWorkflow.runAsStep>[0]
   >["input"]["update"]
 >[0]
+
+/** Remove a product link and its variant links whose Medusa product is gone. */
+async function dropStaleLinks(
+  printful: PrintfulModuleService,
+  productLinkId: string,
+  syncProductId: string
+): Promise<void> {
+  const storeId = await printful.getStoreId()
+  const variantLinks = await printful.listPrintfulVariantLinks({
+    printful_store_id: storeId,
+    printful_sync_product_id: syncProductId,
+  })
+  if (variantLinks.length) {
+    await printful.deletePrintfulVariantLinks(variantLinks.map((l) => l.id))
+  }
+  await printful.deletePrintfulProductLinks(productLinkId)
+}
+
+/**
+ * First step, and the only one with a compensation that touches the sync log.
+ *
+ * Every later step is background-executed, so whoever started the workflow
+ * has already moved on by the time one of them throws. Without this, a failed
+ * sync stayed `running` — holding the one-running claim and showing the admin
+ * a progress bar — until the stale reaper noticed an hour later. A failure
+ * anywhere downstream rolls back through here and marks the log failed.
+ */
+const guardSyncLogStep = createStep(
+  "guard-sync-log",
+  async (input: SyncProductsInput) => {
+    return new StepResponse(input.sync_log_id, input.sync_log_id)
+  },
+  async (syncLogId: string | undefined, { container }) => {
+    if (!syncLogId) {
+      return
+    }
+    const printful: PrintfulModuleService = container.resolve(PRINTFUL_MODULE)
+    const logger = container.resolve(ContainerRegistrationKeys.LOGGER)
+    const failed = await printful.failRunningSyncLog(
+      syncLogId,
+      "workflow_failed: see the server log for the step that threw"
+    )
+    if (failed) {
+      logger.error(`Printful sync ${syncLogId} failed and was rolled back`)
+    }
+  }
+)
 
 const fetchPrintfulProductsStep = createStep(
   {
@@ -163,6 +216,29 @@ const mapToMedusaProductsStep = createStep(
       client.getCatalogVariant(id)
     )
 
+    // Resolved once per sync, not per product. Applied to creates only, so a
+    // merchant who moves a product to another channel is not overruled.
+    const placement = await resolveProductPlacement({
+      salesChannelIds: input.options.salesChannelIds,
+      shippingProfileId: input.options.shippingProfileId,
+      getDefaultSalesChannelId: async () => {
+        const storeModule = container.resolve(Modules.STORE)
+        const [store] = await storeModule.listStores({}, { take: 1 })
+        return store?.default_sales_channel_id
+      },
+      getDefaultShippingProfileId: async () => {
+        const fulfillmentModule = container.resolve(Modules.FULFILLMENT)
+        const [profile] = await fulfillmentModule.listShippingProfiles(
+          { type: "default" },
+          { take: 1 }
+        )
+        return profile?.id
+      },
+    })
+    for (const warning of placement.warnings) {
+      logger.warn(`Printful sync: ${warning}`)
+    }
+
     const productsToCreate: CreateProductInput[] = []
     const productsToUpdate: {
       productId: string
@@ -202,14 +278,40 @@ const mapToMedusaProductsStep = createStep(
           }
         )
 
-        const existingLink = await printful.findProductLink(String(summary.id))
+        let existingLink: Awaited<
+          ReturnType<typeof printful.findProductLink>
+        > | null = await printful.findProductLink(String(summary.id))
 
+        // A link whose Medusa product was deleted by hand. Left in place, it
+        // fails this product on every sync forever and the product is never
+        // re-imported. Dropping the stale links lets it be created afresh.
+        let product: Awaited<
+          ReturnType<typeof productModule.retrieveProduct>
+        > | null = null
         if (existingLink?.medusa_product_id) {
-          const productId = existingLink.medusa_product_id
+          try {
+            product = await productModule.retrieveProduct(
+              existingLink.medusa_product_id,
+              { relations: ["variants"] }
+            )
+          } catch (err) {
+            if (
+              !(err instanceof MedusaError) ||
+              err.type !== MedusaError.Types.NOT_FOUND
+            ) {
+              throw err
+            }
+            logger.warn(
+              `Printful sync: product ${existingLink.medusa_product_id} linked to ` +
+                `sync product ${summary.id} no longer exists; re-importing it`
+            )
+            await dropStaleLinks(printful, existingLink.id, String(summary.id))
+            existingLink = null
+          }
+        }
 
-          const product = await productModule.retrieveProduct(productId, {
-            relations: ["variants"],
-          })
+        if (existingLink?.medusa_product_id && product) {
+          const productId = existingLink.medusa_product_id
 
           const publication = resolveExistingProductWrite({
             plan: planStockActions(detail.sync_variants),
@@ -314,6 +416,16 @@ const mapToMedusaProductsStep = createStep(
             })),
             metadata: createMetadata,
             external_id: mapped.external_id,
+            ...(placement.salesChannelIds.length
+              ? {
+                  sales_channels: placement.salesChannelIds.map((id) => ({
+                    id,
+                  })),
+                }
+              : {}),
+            ...(placement.shippingProfileId
+              ? { shipping_profile_id: placement.shippingProfileId }
+              : {}),
           })
 
           linksToCreate.push({ syncProductId: String(summary.id) })
@@ -614,10 +726,7 @@ const removalsAndBundlesStep = createStep(
 
     if (!input.limit) {
       try {
-        const products = await productModule.listProducts(
-          {},
-          { take: 100_000, relations: ["variants"] }
-        )
+        const products = await listAllProducts(productModule)
 
         const variantsById = new Map(
           products.flatMap((p) =>
@@ -704,6 +813,7 @@ const finalizeSyncLogStep = createStep(
 export const syncProductsWorkflow = createWorkflow(
   "printful-sync-products",
   (input: SyncProductsInput) => {
+    guardSyncLogStep(input)
     const fetchRes = fetchPrintfulProductsStep(input)
 
     const mapRes = mapToMedusaProductsStep({

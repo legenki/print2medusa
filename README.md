@@ -44,7 +44,7 @@ plugins: [
       // Live shipping rates. `fallbackShippingRates` is required when this is
       // on — it is what a cart prices at if Printful is unreachable.
       liveShippingRates: true,
-      fallbackShippingRates: { STANDARD: 700, PRINTFUL_RETURN: 700 },
+      fallbackShippingRates: { STANDARD: 7, PRINTFUL_RETURN: 7 },
     },
   },
 ],
@@ -107,6 +107,9 @@ See `examples/basic-store/` for a fuller snippet.
 
 - Re-sync updates existing products via link tables (no duplicates) and **upserts variants** — price and assortment changes in Printful reach Medusa; manually-added Medusa variants are left untouched.
 - Concurrent / re-fired payment events will not create a second Printful order: the order is **claimed insert-first** via a unique index on `printful_order_link.medusa_order_id` before the Printful API is called.
+- `POST /orders` is **never retried by the client**. A create whose outcome is unknown (timeout, 5xx) is settled by looking the order up by `external_id` instead. A claim younger than ten minutes is left to the create that owns it, so `order.placed` and `payment.captured` arriving together cannot race. Claims still unresolved after that are settled by the `printful-retry-orders` job every 15 minutes — an order canceled in Medusa in the meantime is never sent.
+- A parcel whose Medusa fulfillment was created but never marked shipped is **completed on the next webhook or retry**. Canceling a parcel's fulfillment in Medusa does **not** cancel the Printful order; only an order-level fulfillment does.
+- A **bundle line is fulfilled only when every member has shipped**, counted across parcels.
 - Shipping `province` is normalized to the 2-letter `state_code` Printful expects for US/CA.
 - Printful redelivers webhooks by design. Each event is stored under a **derived `event_id`** carrying a unique index, so a redelivery is absorbed rather than producing a second fulfillment. Delivery metadata (`retries`, `store`) is excluded from that id — otherwise the same event would hash differently on each attempt.
 - Events for one order are **serialized with a transaction-scoped advisory lock**, so two events cannot both pass the "shipment not yet recorded" check and each create a fulfillment for one parcel.
@@ -128,6 +131,10 @@ options: {
   webhookSecret: process.env.PRINTFUL_WEBHOOK_SECRET, // long, random
 }
 ```
+
+Generate it as hex — `openssl rand -hex 32` — so it is URL-safe as it stands.
+Other alphabets work too (the registered URL is percent-encoded), but a hex
+secret is one you can paste into a URL by hand without surprises.
 
 ```bash
 curl -X POST https://your-store.com/admin/printful/webhook \
@@ -206,7 +213,7 @@ plugins: [
     options: {
       apiToken: process.env.PRINTFUL_API_TOKEN,
       liveShippingRates: true,
-      fallbackShippingRates: { STANDARD: 500 }, // minor units
+      fallbackShippingRates: { STANDARD: 5 }, // Medusa amount, main units ($5.00)
     },
   },
 ],
@@ -233,6 +240,11 @@ modules: [
 resolve Printful variant ids, and every quote quietly falls back to the flat
 rate. Medusa resolves an undeclared dependency to `undefined` rather than
 failing, so the plugin logs an error at startup instead.
+
+**Rates are Medusa amounts, in the currency's main unit** — the same unit as
+every Medusa v2 price: `5` is $5.00, `800` is ¥800. Before 0.10.0 the plugin
+documented minor units here (`500` for $5) and returned live quotes the same
+way, which Medusa charged a hundredfold.
 
 **Give `fallbackShippingRates` an entry for every method you offer.** A method
 with no entry prices at **zero** rather than blocking checkout: Medusa cannot
@@ -278,6 +290,22 @@ Nothing sweeps on a timer: the next sync attempt — manual, or the nightly job 
 reclaims any claim whose heartbeat is older than `syncStaleMinutes` (default 60)
 and proceeds. Products created but not yet linked are deleted on rollback, so a
 crash leaves no half-imported products behind.
+
+**A sync that fails is marked failed at once.** If any step throws, the
+workflow rolls back and the log row is set to `failed` with
+`workflow_failed`, freeing the claim immediately rather than after
+`syncStaleMinutes`.
+
+**New products are put on sale where Medusa can sell them.** Each created
+product joins `salesChannelIds` (default: the store's default sales channel)
+and gets `shippingProfileId` (default: the store's `default` shipping profile).
+Without a channel the Store API never lists a product; without a profile a cart
+offers it no shipping option. Both apply on creation only, so channels or
+profiles you change afterwards are kept. If neither an option nor a store
+default exists, the sync logs a warning and imports the product anyway.
+
+**A product you delete in Medusa is re-imported.** Its stale links are dropped
+on the next sync and the Printful product is created afresh.
 
 ### Stock
 
@@ -526,6 +554,8 @@ the testing strategy for each release.
 | `syncStaleMinutes`      | Minutes before a running sync is presumed dead and reclaimed (default 60)          |
 | `onDiscontinued`        | `"flag"` (default) marks discontinued products, `"ignore"` omits the marker        |
 | `onRemovedFromPrintful` | `"unpublish"` (default) drafts products gone from Printful, `"ignore"` leaves them |
+| `salesChannelIds`       | Sales channels new products join (default: the store's default sales channel)      |
+| `shippingProfileId`     | Shipping profile new products get (default: the store's `default` profile)         |
 
 ## License
 

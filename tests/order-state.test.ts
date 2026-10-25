@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest"
-import { planOrderStateActions } from "../src/utils/order-state"
+import {
+  planOrderStateActions,
+  planShipmentRepairs,
+  recordedShipmentIds,
+} from "../src/utils/order-state"
 import type { PrintfulOrder } from "../src/utils/types"
 
 const base: PrintfulOrder = { id: 777, status: "pending" }
@@ -252,5 +256,88 @@ describe("planOrderStateActions costs", () => {
       []
     )
     expect(plan.metadata.printful_cost_total).toBeUndefined()
+  })
+})
+
+describe("planShipmentRepairs", () => {
+  const shipments = [
+    {
+      printful_shipment_id: "s1",
+      tracking_number: "1Z999",
+      tracking_url: "https://track/1Z999",
+    },
+  ]
+
+  it("completes a parcel fulfillment that was never marked shipped", () => {
+    // Fulfillment and shipment are separate workflows. A failure between them
+    // left the parcel "recorded" but never shipped, and no retry looked again.
+    expect(
+      planShipmentRepairs(
+        [
+          {
+            id: "ful_1",
+            metadata: { printful_shipment_id: "s1" },
+            shipped_at: null,
+            items: [{ line_item_id: "ordli_1", quantity: 2 }],
+          },
+        ],
+        shipments
+      )
+    ).toEqual([
+      {
+        fulfillment_id: "ful_1",
+        items: [{ id: "ordli_1", quantity: 2 }],
+        labels: [
+          {
+            tracking_number: "1Z999",
+            tracking_url: "https://track/1Z999",
+            label_url: "",
+          },
+        ],
+      },
+    ])
+  })
+
+  it("leaves shipped, canceled and non-Printful fulfillments alone", () => {
+    expect(
+      planShipmentRepairs(
+        [
+          {
+            id: "ful_shipped",
+            metadata: { printful_shipment_id: "s1" },
+            shipped_at: new Date(),
+            items: [{ line_item_id: "ordli_1", quantity: 1 }],
+          },
+          {
+            id: "ful_canceled",
+            metadata: { printful_shipment_id: "s1" },
+            canceled_at: new Date(),
+            items: [{ line_item_id: "ordli_1", quantity: 1 }],
+          },
+          {
+            id: "ful_manual",
+            metadata: {},
+            items: [{ line_item_id: "ordli_1", quantity: 1 }],
+          },
+        ],
+        shipments
+      )
+    ).toEqual([])
+  })
+})
+
+describe("recordedShipmentIds", () => {
+  it("does not count a canceled fulfillment as recording its parcel", () => {
+    expect(
+      recordedShipmentIds([
+        { id: "a", metadata: { printful_shipment_id: "s1" } },
+        {
+          id: "b",
+          metadata: { printful_shipment_id: "s2" },
+          canceled_at: new Date(),
+        },
+        { id: "c", metadata: null },
+      ])
+    ).toEqual(["s1"])
   })
 })

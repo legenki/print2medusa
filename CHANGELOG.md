@@ -1,5 +1,99 @@
 # Changelog
 
+## 0.10.0
+
+Fixes from a full review. **Contains a breaking configuration change** — read
+"Upgrading" first.
+
+### Upgrading
+
+- **`fallbackShippingRates` is now in main units**, like every Medusa v2
+  amount: `{ STANDARD: 5 }` is $5.00. A value written for 0.9.x in minor units
+  (`500`) now prices shipping at $500 — divide yours by 100 (by 1 for
+  zero-decimal currencies, by 1000 for KWD/BHD/JOD/OMR/TND/LYD).
+- **Product prices are rewritten on the next sync.** Run one after upgrading;
+  every Printful variant price is replaced with the corrected amount.
+- New optional options `salesChannelIds` and `shippingProfileId` (see below).
+- A new scheduled job, `printful-retry-orders`, runs every 15 minutes.
+
+### Fixed
+
+- **Every amount crossing into Medusa was a hundred times too large.** Medusa
+  v2 stores money in the currency's main unit — its admin formats `amount`
+  as-is, and payment providers scale it up themselves (Stripe's
+  `getSmallestUnit`). The plugin wrote minor units: a $25.00 Printful price
+  became a $2,500 variant, a $4.99 live shipping quote charged $499, and the
+  customs `value` sent with each rate request was divided by 100. New
+  `parsePriceToAmount` / `roundToCurrency` produce main-unit amounts rounded to
+  the currency's own precision; `applyMarkup` takes the currency so it rounds
+  to cents, whole yen or fils. Order cost metadata (`printful_cost_*`) is the
+  plugin's own record and stays in minor units, unchanged.
+- **Imported products were invisible on the storefront.** They were created in
+  no sales channel and with no shipping profile, so the Store API never listed
+  them and carts offered them no shipping option. New products now join
+  `salesChannelIds` (default: the store's default sales channel) and get
+  `shippingProfileId` (default: the store's `default` profile), on creation
+  only.
+- **Concurrent creates could delete each other's claim.** A fresh `pending`
+  claim looked exactly like an abandoned one, so `order.placed` and
+  `payment.captured` arriving together on a capture-on-place store could
+  reconcile — and release — a claim whose POST was still in the air. Claims
+  younger than ten minutes without `last_attempt_at` are now left alone
+  (`create_in_progress`).
+- **`POST /orders` was retried inside the client.** A create that timed out
+  but landed met Printful's duplicate-`external_id` rejection on the retry; if
+  that is a 400 rather than a 409, it read as "never created" and released the
+  claim for an order that exists. Creates are never retried by the client now;
+  the workflow's lookup by `external_id` settles unknown outcomes.
+- **Unresolved claims were never revisited.** A create held as `unverified`,
+  or interrupted between claim and POST, waited for a payment event that never
+  came again. `printful-retry-orders` settles them through the ordinary create
+  workflow. Orders canceled in Medusa are skipped (`order_canceled`).
+- **A parcel could stay unshipped forever.** Fulfillment and shipment are two
+  workflows; a failure between them left a fulfillment that marked the parcel
+  as recorded, so no retry looked again. The webhook path now completes such
+  shipments first. A canceled fulfillment no longer counts as recording its
+  parcel.
+- **Canceling one parcel's fulfillment canceled the whole Printful order.**
+  Parcel fulfillments now carry `printful_shipment_id` in their data, and
+  `cancelFulfillment` leaves the Printful order alone for them.
+- **A bundle was marked fulfilled by its first parcel.** Members shipping in
+  separate parcels closed the bundle line with the first one. A bundle unit is
+  now fulfilled only once every member has shipped, counted across parcels.
+- **A parcel without an item breakdown fulfilled non-Printful lines** of a
+  mixed cart. It now covers Printful lines only.
+- **Checkout could stall for minutes.** The shipping provider inherited the
+  client's three retries, each honouring an uncapped `Retry-After`. It now
+  makes one retry with at most a 2s wait; the client caps every retry wait
+  (`maxRetryDelayMs`, default 30s).
+- **The nightly sync always logged itself as failed.** Its steps run in the
+  background, so `run()` returns before any counters exist and reading
+  `result.counters` threw. The job no longer reads them.
+- **A failed sync stayed `running` for an hour.** A new first step's
+  compensation marks the log `failed` (`workflow_failed`) as soon as any step
+  throws, freeing the claim.
+- **Reaping and clearing a sync were read-then-write.** Both are now a single
+  conditional `UPDATE … RETURNING`, so a heartbeat landing between the check
+  and the write can no longer get a live sync marked failed.
+- **A product deleted in Medusa failed every sync forever.** Its stale product
+  and variant links are now dropped and the product is re-imported.
+- **Design enrichment fired one catalog request per colour at once** — 84 for
+  a full tee — into Printful's rate limiter, caching each 429 as a blank. At
+  most four are in flight now.
+- **The webhook secret was not URL-encoded** when registering the endpoint, so
+  a base64 secret containing `/` or `+` made every delivery 404.
+- **Admin lists stopped at 100 or 1000 products.** The design, prompts and
+  bundles routes and the sync's bundle pass now page through the whole
+  catalogue, so bundle members on large stores are no longer reported missing.
+- **The admin page polled five endpoints every 3s during a sync**, one of them
+  a live Printful call competing with the sync for the rate limit. It now
+  polls sync history only and refreshes the rest once the sync ends. Prompt
+  requests are debounced.
+
+### Changed
+
+- CI and publish run `npm run lint` and use Node 22 (Node 20 is end-of-life).
+
 ## 0.9.8
 
 Tests and builds against Medusa 2.21.1. No change to the plugin's own code.

@@ -593,3 +593,100 @@ describe("getCatalogVariant", () => {
     await expect(client.getCatalogVariant(999999)).resolves.toBeNull()
   })
 })
+
+describe("non-idempotent requests", () => {
+  it("never repeats POST /orders, even on a retryable failure", async () => {
+    // A create that timed out may have landed. Repeating it inside the client
+    // turns that unknown outcome into Printful's duplicate-external_id
+    // rejection — a 4xx that reads as "never created" and releases the claim
+    // for an order that exists. The workflow's reconcile path settles it.
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ code: 500, result: "boom" }, 500))
+
+    const client = new PrintfulClient({
+      apiToken: "token",
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      maxRetries: 3,
+      retryBaseMs: 1,
+    })
+
+    await expect(
+      client.createOrder({
+        external_id: "order_1",
+        recipient: {} as never,
+        items: [],
+      })
+    ).rejects.toBeInstanceOf(PrintfulApiError)
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
+  })
+
+  it("never repeats POST /orders after a transport error", async () => {
+    const fetchImpl = vi.fn().mockRejectedValue(new TypeError("socket hang up"))
+
+    const client = new PrintfulClient({
+      apiToken: "token",
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      maxRetries: 3,
+      retryBaseMs: 1,
+    })
+
+    await expect(
+      client.createOrder({
+        external_id: "order_1",
+        recipient: {} as never,
+        items: [],
+      })
+    ).rejects.toThrow("socket hang up")
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
+  })
+
+  it("still retries idempotent reads", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ code: 500, result: "boom" }, 500))
+      .mockResolvedValueOnce(jsonResponse({ code: 200, result: { id: 7 } }))
+
+    const client = new PrintfulClient({
+      apiToken: "token",
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      maxRetries: 1,
+      retryBaseMs: 1,
+    })
+
+    expect((await client.getOrder(7)).id).toBe(7)
+    expect(fetchImpl).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe("retry delay ceiling", () => {
+  it("caps a long Retry-After instead of sleeping for it", async () => {
+    // A 429 with `Retry-After: 3600` inside checkout would hold the
+    // customer's request for an hour.
+    vi.useFakeTimers()
+    try {
+      const fetchImpl = vi
+        .fn()
+        .mockResolvedValueOnce(
+          jsonResponse({ code: 429, result: "slow down" }, 429, {
+            "Retry-After": "3600",
+          })
+        )
+        .mockResolvedValueOnce(jsonResponse({ code: 200, result: { id: 1 } }))
+
+      const client = new PrintfulClient({
+        apiToken: "token",
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+        maxRetries: 1,
+        maxRetryDelayMs: 2000,
+      })
+
+      const pending = client.getOrder(1)
+      await vi.advanceTimersByTimeAsync(2000)
+      expect((await pending).id).toBe(1)
+      expect(fetchImpl).toHaveBeenCalledTimes(2)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})

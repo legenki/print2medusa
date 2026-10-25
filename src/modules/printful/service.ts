@@ -337,6 +337,18 @@ class PrintfulModuleService extends MedusaService({
     }
   }
 
+  /**
+   * Claims still holding the `pending` sentinel, oldest first — creates whose
+   * outcome was never established. The order sweep settles them; without it
+   * they waited for a payment event that never comes again.
+   */
+  async listUnresolvedOrderLinks(limit = 25) {
+    return this.listPrintfulOrderLinks(
+      { printful_order_id: PENDING_PRINTFUL_ORDER_ID },
+      { take: limit, order: { created_at: "ASC" } }
+    )
+  }
+
   async getLatestSyncLog() {
     const logs = await this.listPrintfulSyncLogs(
       {},
@@ -346,29 +358,71 @@ class PrintfulModuleService extends MedusaService({
   }
 
   /**
+   * Run one conditional UPDATE on printful_sync_log and return the ids it
+   * changed.
+   *
+   * Raw SQL on purpose. The generated list-then-update pair leaves a window
+   * between the read that decides and the write that acts: a heartbeat landing
+   * in it still gets its live sync marked failed, which frees the claim for a
+   * second sync over the same catalog. With the predicate in the UPDATE itself
+   * Postgres re-checks it against the row it locks, so the decision and the
+   * write are one statement.
+   */
+  private async failSyncLogsWhere(
+    predicate: string,
+    params: unknown[],
+    errorMessage: string
+  ): Promise<string[]> {
+    return this.baseRepository_.transaction(async (manager) => {
+      const result = await manager.execute<
+        Array<{ id: string }> | { rows?: Array<{ id: string }> }
+      >(
+        `update "printful_sync_log"
+            set "status" = 'failed',
+                "error_message" = ?,
+                "finished_at" = now(),
+                "updated_at" = now()
+          where "status" = 'running'
+            and "deleted_at" is null
+            and (${predicate})
+          returning "id"`,
+        [errorMessage, ...params]
+      )
+      const rows = Array.isArray(result) ? result : (result?.rows ?? [])
+      return rows.map((row) => row.id)
+    })
+  }
+
+  /**
    * Mark abandoned running syncs as failed.
    *
-   * One statement whose predicate does the selecting, so there is no
-   * read-then-decide window. A row is abandoned when its heartbeat is older
-   * than the stale window, or when it never got one.
+   * A row is abandoned when its heartbeat is older than the stale window, or
+   * when it never got one. One statement — see failSyncLogsWhere.
    */
   async reapStaleSyncLogs(staleMinutes: number): Promise<number> {
     const cutoff = new Date(Date.now() - staleMinutes * 60 * 1000)
-    const stale = await this.listPrintfulSyncLogs({
-      status: "running",
-      $or: [{ heartbeat_at: { $lt: cutoff } }, { heartbeat_at: null }],
-    })
+    const reaped = await this.failSyncLogsWhere(
+      `"heartbeat_at" is null or "heartbeat_at" < ?`,
+      [cutoff],
+      "stale_running"
+    )
+    return reaped.length
+  }
 
-    for (const log of stale) {
-      await this.updatePrintfulSyncLogs({
-        id: log.id,
-        status: "failed",
-        error_message: "stale_running",
-        finished_at: new Date(),
-      })
-    }
-
-    return stale.length
+  /**
+   * Mark one sync failed because its workflow failed, if it is still running.
+   *
+   * Without this a sync whose workflow threw stayed `running` — blocking every
+   * other sync and showing the admin a progress bar — until the stale reaper
+   * noticed an hour later.
+   */
+  async failRunningSyncLog(id: string, errorMessage: string): Promise<boolean> {
+    const failed = await this.failSyncLogsWhere(
+      `"id" = ?`,
+      [id],
+      errorMessage.slice(0, 1000)
+    )
+    return failed.length > 0
   }
 
   /**
@@ -417,8 +471,9 @@ class PrintfulModuleService extends MedusaService({
    * marker naming them as the cause, so the two are distinguishable in the log
    * long after the fact.
    *
-   * The `heartbeat_at` predicate makes the write conditional on the row still
-   * being as stale as the caller observed. Between the route's read and this
+   * The `heartbeat_at` predicate, evaluated inside the UPDATE itself, makes
+   * the write conditional on the row still being as stale as the caller
+   * observed. Between the route's read and this
    * write, a sync everyone believed dead can emit one more heartbeat; without
    * this predicate that row would be marked `failed` underneath a live
    * process. With it, the late heartbeat moves `heartbeat_at` past the
@@ -433,26 +488,18 @@ class PrintfulModuleService extends MedusaService({
     observedHeartbeatAt: Date | null
     errorMessage: string
   }): Promise<boolean> {
-    const stillStale = await this.listPrintfulSyncLogs({
-      id: input.id,
-      status: "running",
-      heartbeat_at: input.observedHeartbeatAt
-        ? { $lte: input.observedHeartbeatAt }
-        : null,
-    })
-
-    if (stillStale.length === 0) {
-      return false
-    }
-
-    await this.updatePrintfulSyncLogs({
-      id: input.id,
-      status: "failed",
-      error_message: input.errorMessage,
-      finished_at: new Date(),
-    })
-
-    return true
+    const cleared = input.observedHeartbeatAt
+      ? await this.failSyncLogsWhere(
+          `"id" = ? and "heartbeat_at" <= ?`,
+          [input.id, input.observedHeartbeatAt],
+          input.errorMessage
+        )
+      : await this.failSyncLogsWhere(
+          `"id" = ? and "heartbeat_at" is null`,
+          [input.id],
+          input.errorMessage
+        )
+    return cleared.length > 0
   }
 
   /** Refresh the claim so it is not reaped, and report progress. */

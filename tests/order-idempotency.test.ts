@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest"
 import { PrintfulApiError } from "../src/utils/errors"
 import {
   assertUsableExternalId,
+  CLAIM_IN_FLIGHT_MS,
   classifyCreateFailure,
+  classifyPendingClaim,
   isUnresolvedLink,
   PRINTFUL_EXTERNAL_ID_MAX,
 } from "../src/utils/order-idempotency"
@@ -108,5 +110,47 @@ describe("isUnresolvedLink", () => {
     // Erring towards "unresolved" means we look the order up; erring the other
     // way would mark it complete and never ship it.
     expect(isUnresolvedLink({ printful_order_id: "" }, "")).toBe(true)
+  })
+})
+
+describe("classifyPendingClaim", () => {
+  const now = Date.parse("2026-10-25T12:00:00Z")
+
+  it("leaves a fresh claim to the create that is still running", () => {
+    // order.placed and payment.captured arrive together on capture-on-place
+    // stores. The second must not settle — and delete — the first's claim
+    // while its POST is still in the air.
+    expect(
+      classifyPendingClaim(
+        { created_at: new Date(now - 5_000), last_attempt_at: null },
+        now
+      )
+    ).toBe("in_flight")
+  })
+
+  it("settles a claim old enough that no create can still own it", () => {
+    expect(
+      classifyPendingClaim(
+        { created_at: new Date(now - CLAIM_IN_FLIGHT_MS - 1) },
+        now
+      )
+    ).toBe("settle")
+  })
+
+  it("settles a claim an earlier attempt marked unverified, however fresh", () => {
+    expect(
+      classifyPendingClaim(
+        {
+          created_at: new Date(now - 1_000),
+          last_attempt_at: new Date(now - 500),
+        },
+        now
+      )
+    ).toBe("settle")
+  })
+
+  it("settles rather than strands a claim with no readable timestamp", () => {
+    expect(classifyPendingClaim({}, now)).toBe("settle")
+    expect(classifyPendingClaim({ created_at: "garbage" }, now)).toBe("settle")
   })
 })

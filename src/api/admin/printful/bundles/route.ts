@@ -4,6 +4,7 @@ import {
   bundleMembersOf,
   planBundleAvailability,
 } from "../../../../utils/bundle"
+import { listAllProducts } from "../../../../utils/list-products"
 
 /**
  * Bundles and whether each can currently be sold.
@@ -21,10 +22,7 @@ import {
 export async function GET(req: MedusaRequest, res: MedusaResponse) {
   const productModule = req.scope.resolve(Modules.PRODUCT)
 
-  const products = await productModule.listProducts(
-    {},
-    { relations: ["variants"], take: 1000 }
-  )
+  const products = await listAllProducts(productModule)
 
   // Members are variant ids on other products, so the whole catalogue has to
   // be indexed before any bundle can be resolved.

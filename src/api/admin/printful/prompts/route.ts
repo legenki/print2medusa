@@ -6,6 +6,7 @@ import {
   PROMPT_STYLES,
   type PromptStyle,
 } from "../../../../utils/prompt"
+import { listAllProducts } from "../../../../utils/list-products"
 
 /**
  * Mockup prompts per product.
@@ -31,10 +32,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
       ? query.artwork.trim()
       : undefined
 
-  const products = await productModule.listProducts(
-    {},
-    { relations: ["variants"], take: 100 }
-  )
+  const products = await listAllProducts(productModule)
 
   const items = products
     .map((product) => {

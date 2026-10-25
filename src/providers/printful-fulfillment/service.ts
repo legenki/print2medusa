@@ -143,6 +143,12 @@ class PrintfulFulfillmentProviderService extends AbstractFulfillmentProviderServ
       // runs inside the customer's own "add shipping method" request, so a
       // hanging Printful would hold up checkout rather than a background job.
       timeoutMs: this.options_.timeoutMs,
+      // The same reasoning bounds the retries. The client default (3 retries,
+      // honouring a Retry-After of up to 30s) is right for a sync and wrong
+      // for a customer waiting on a price: one quick retry, then the cache or
+      // flat-rate fallback answers instead.
+      maxRetries: 1,
+      maxRetryDelayMs: 2_000,
     })
   }
 
@@ -645,11 +651,18 @@ class PrintfulFulfillmentProviderService extends AbstractFulfillmentProviderServ
       (data?.printful_order_id as string | undefined) ||
       (fulfillment?.metadata?.printful_order_id as string | undefined)
 
+    // The webhook path creates one fulfillment per Printful parcel. Carrying
+    // the parcel id into `data` is what lets cancelFulfillment tell such a
+    // record apart from the order as a whole.
+    const shipmentId = fulfillment?.metadata?.printful_shipment_id as
+      string | undefined
+
     if (existingId) {
       return {
         data: {
           ...(typeof data === "object" ? data : {}),
           printful_order_id: existingId,
+          ...(shipmentId ? { printful_shipment_id: shipmentId } : {}),
         },
         labels: [],
       }
@@ -674,6 +687,18 @@ class PrintfulFulfillmentProviderService extends AbstractFulfillmentProviderServ
   async cancelFulfillment(data: Record<string, unknown>): Promise<unknown> {
     const printfulOrderId = data?.printful_order_id as string | undefined
     if (!printfulOrderId) {
+      return {}
+    }
+
+    // A parcel fulfillment records something Printful has already shipped.
+    // Canceling it in Medusa corrects Medusa's books; it must not DELETE the
+    // Printful order, which would cancel every parcel still in production.
+    if (data?.printful_shipment_id) {
+      this.logger_.warn(
+        `Canceled the Medusa record of Printful parcel ${String(
+          data.printful_shipment_id
+        )}; Printful order ${printfulOrderId} was left untouched.`
+      )
       return {}
     }
 

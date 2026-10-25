@@ -30,7 +30,7 @@ module.exports = defineConfig({
         // onDiscontinued: "flag",
         // onRemovedFromPrintful: "unpublish", // or "ignore"
         // liveShippingRates: true,
-        // fallbackShippingRates: { STANDARD: 500 },
+        // fallbackShippingRates: { STANDARD: 5 },
       },
     },
   ],
@@ -52,7 +52,7 @@ module.exports = defineConfig({
               apiToken: process.env.PRINTFUL_API_TOKEN,
               storeId: process.env.PRINTFUL_STORE_ID,
               // liveShippingRates: true,
-              // fallbackShippingRates: { STANDARD: 500 },
+              // fallbackShippingRates: { STANDARD: 5 },
             },
           },
         ],

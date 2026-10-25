@@ -69,7 +69,13 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     return
   }
 
-  const url = `${body.base_url.replace(/\/$/, "")}/hooks/printful/${options.webhookSecret}`
+  // Encoded because the secret is a path segment. A base64 secret carrying
+  // "/" or "+" would otherwise split the path or change on decoding, and every
+  // delivery would 404. Express decodes `req.params.token` back to the
+  // configured value before the comparison.
+  const url = `${body.base_url.replace(/\/$/, "")}/hooks/printful/${encodeURIComponent(
+    options.webhookSecret
+  )}`
 
   // Printful keeps one config per store, so this replaces the whole allowlist.
   const updated = await client.setWebhookConfig(url, [

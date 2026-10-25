@@ -24,6 +24,15 @@ export type PrintfulClientOptions = {
   /** Base delay in ms for exponential backoff */
   retryBaseMs?: number
   /**
+   * Ceiling on any single retry wait, including one Printful asks for with
+   * `Retry-After`. Default 30000.
+   *
+   * Printful's rate limiter answers 429 with `Retry-After` of up to a minute.
+   * On a background sync that is fine to honour; inside checkout it holds the
+   * customer's request open, so the shipping provider lowers this sharply.
+   */
+  maxRetryDelayMs?: number
+  /**
    * Per-attempt deadline in ms. Default 15000.
    *
    * Node's fetch bounds headers and body at 300s each and imposes no overall
@@ -44,6 +53,7 @@ export class PrintfulClient {
   private readonly fetchImpl: typeof fetch
   private readonly maxRetries: number
   private readonly retryBaseMs: number
+  private readonly maxRetryDelayMs: number
   private readonly timeoutMs: number
 
   constructor(options: PrintfulClientOptions) {
@@ -57,6 +67,10 @@ export class PrintfulClient {
     this.fetchImpl = options.fetchImpl ?? fetch
     this.maxRetries = options.maxRetries ?? 3
     this.retryBaseMs = options.retryBaseMs ?? 500
+    this.maxRetryDelayMs =
+      Number(options.maxRetryDelayMs) > 0
+        ? Number(options.maxRetryDelayMs)
+        : 30_000
     this.timeoutMs =
       Number(options.timeoutMs) > 0 ? Number(options.timeoutMs) : 15000
   }
@@ -131,10 +145,16 @@ export class PrintfulClient {
     const confirm = input.confirm === true
     const path = confirm ? "/orders?confirm=1" : "/orders"
     const { confirm: _confirm, ...body } = input
-    const data = await this.request<PrintfulOrder>(path, {
-      method: "POST",
-      body: JSON.stringify(body),
-    })
+    // Never retried here. A create that timed out or hit a 5xx may still have
+    // landed, and repeating it would meet Printful's duplicate-external_id
+    // rejection — a 4xx that looks like "never created" and would release
+    // the claim for an order that exists. The caller owns that recovery: it
+    // looks the order up by external_id instead of POSTing twice.
+    const data = await this.request<PrintfulOrder>(
+      path,
+      { method: "POST", body: JSON.stringify(body) },
+      { retries: 0 }
+    )
     return data.result
   }
 
@@ -274,8 +294,10 @@ export class PrintfulClient {
 
   private async request<T>(
     path: string,
-    init: RequestInit = {}
+    init: RequestInit = {},
+    opts: { retries?: number } = {}
   ): Promise<PrintfulApiResponse<T>> {
+    const maxRetries = opts.retries ?? this.maxRetries
     const url = `${this.baseUrl}${path.startsWith("/") ? path : `/${path}`}`
     const headers: Record<string, string> = {
       Authorization: `Bearer ${this.apiToken}`,
@@ -290,7 +312,7 @@ export class PrintfulClient {
 
     let lastError: unknown
 
-    for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
       try {
         // A fresh signal per attempt. Sharing one would abort every retry the
         // moment the first attempt's deadline passed, turning a transient 500
@@ -324,7 +346,7 @@ export class PrintfulClient {
             body: json ?? text,
           })
 
-          if (error.isRetryable && attempt < this.maxRetries) {
+          if (error.isRetryable && attempt < maxRetries) {
             await this.sleep(this.retryDelay(attempt, response))
             lastError = error
             continue
@@ -346,7 +368,7 @@ export class PrintfulClient {
         if (err instanceof PrintfulApiError && !err.isRetryable) {
           throw err
         }
-        if (attempt < this.maxRetries) {
+        if (attempt < maxRetries) {
           await this.sleep(this.retryDelay(attempt))
           continue
         }
@@ -360,14 +382,15 @@ export class PrintfulClient {
   }
 
   private retryDelay(attempt: number, response?: Response): number {
+    let delay = this.retryBaseMs * Math.pow(2, attempt)
     const retryAfter = response?.headers?.get?.("retry-after")
     if (retryAfter) {
       const seconds = Number(retryAfter)
       if (!Number.isNaN(seconds) && seconds > 0) {
-        return seconds * 1000
+        delay = seconds * 1000
       }
     }
-    return this.retryBaseMs * Math.pow(2, attempt)
+    return Math.min(delay, this.maxRetryDelayMs)
   }
 
   private sleep(ms: number): Promise<void> {

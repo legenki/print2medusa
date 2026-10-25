@@ -15,8 +15,16 @@ import {
   MAX_WEBHOOK_ATTEMPTS,
   nextRetryDelayMs,
 } from "../modules/printful/service"
-import { planOrderStateActions } from "../utils/order-state"
-import { medusaLineIdFor } from "../utils/bundle"
+import {
+  allPlannedShipments,
+  labelsFor,
+  planOrderStateActions,
+  planShipmentRepairs,
+  recordedShipmentIds,
+  SHIPMENT_ID_KEY,
+  type RecordedFulfillment,
+} from "../utils/order-state"
+import { planParcelItems } from "../utils/parcel-items"
 
 export type ApplyOrderStatusInput = {
   /** Row id in printful_webhook_event. */
@@ -27,10 +35,9 @@ type ApplyResult = {
   status: "processed" | "deferred" | "failed"
   reason?: string
   shipments_created: number
+  /** Parcels whose fulfillment existed but had never been marked shipped. */
+  shipments_repaired?: number
 }
-
-/** Fulfillment metadata key that ties a Medusa fulfillment to a Printful parcel. */
-const SHIPMENT_ID_KEY = "printful_shipment_id"
 
 const applyStep = createStep(
   "apply-printful-order-status",
@@ -105,6 +112,10 @@ const applyStep = createStep(
             "items.detail.fulfilled_quantity",
             "fulfillments.id",
             "fulfillments.metadata",
+            "fulfillments.shipped_at",
+            "fulfillments.canceled_at",
+            "fulfillments.items.line_item_id",
+            "fulfillments.items.quantity",
           ],
           filters: { id: link.medusa_order_id },
         })
@@ -120,10 +131,7 @@ const applyStep = createStep(
                 quantity: number
                 detail?: { fulfilled_quantity?: number } | null
               }> | null
-              fulfillments?: Array<{
-                id: string
-                metadata?: Record<string, unknown> | null
-              }> | null
+              fulfillments?: RecordedFulfillment[] | null
             }
           | undefined
 
@@ -145,108 +153,66 @@ const applyStep = createStep(
         // Read back the Printful shipment id we stamped on previous fulfillments.
         // This is how an already-recorded parcel is detected, so a redelivered or
         // duplicated event cannot produce a second fulfillment for it.
-        const recorded = (orderRow.fulfillments ?? [])
-          .map((f) => f.metadata?.[SHIPMENT_ID_KEY])
-          .filter((v): v is string => typeof v === "string")
+        const fulfillments = orderRow.fulfillments ?? []
+        const recorded = recordedShipmentIds(fulfillments)
 
         const plan = planOrderStateActions(pfOrder, recorded)
+        const parcels = allPlannedShipments(pfOrder)
 
         await orderModule.updateOrders(link.medusa_order_id, {
           metadata: { ...(orderRow.metadata ?? {}), ...plan.metadata },
         })
 
-        // Printful's Shipment.items gives a per-parcel breakdown keyed by its own
-        // line item id. create-printful-order.ts stamps external_id with the
-        // Medusa line item id on every item it sends, so this map joins a parcel's
-        // contents back to Medusa line items.
-        //
-        // Bundle members carry a synthetic external_id instead, since several
-        // items descend from one Medusa line and Printful needs them distinct.
-        // `medusaLineIdFor` resolves those back to the bundle line the customer
-        // actually bought — the only line Medusa can fulfil. Taking the id
-        // verbatim would match no line, clamp every parcel to zero, and leave
-        // the order permanently unshipped.
-        const printfulItemToMedusaItem = new Map<number, string>()
-        for (const pfItem of pfOrder.items ?? []) {
-          if (pfItem.external_id) {
-            printfulItemToMedusaItem.set(
-              Number(pfItem.id),
-              medusaLineIdFor(pfItem.external_id)
-            )
-          }
+        // A parcel whose fulfillment exists but whose shipment step never ran
+        // — the two are separate workflows. Finish it before anything new, or
+        // it stays "recorded" and unshipped forever.
+        let repaired = 0
+        for (const repair of planShipmentRepairs(fulfillments, parcels)) {
+          await createOrderShipmentWorkflow(container).run({
+            input: {
+              order_id: link.medusa_order_id,
+              fulfillment_id: repair.fulfillment_id,
+              items: repair.items,
+              labels: repair.labels,
+            },
+          })
+          repaired += 1
         }
 
-        // Remaining unfulfilled quantity per Medusa line item. Decremented as we
-        // go so two parcels in one pass cannot jointly over-fulfill a line.
-        const remaining = new Map<string, number>()
-        for (const item of orderRow.items ?? []) {
-          const fulfilled = Number(item.detail?.fulfilled_quantity ?? 0)
-          remaining.set(item.id, Math.max(0, Number(item.quantity) - fulfilled))
-        }
-
-        /**
-         * Items to fulfill for one parcel, clamped to what Medusa still has open.
-         *
-         * Clamping is load-bearing: Printful can report more than Medusa has
-         * outstanding — after a partial cancel, or on a reshipment, where the same
-         * units ship twice and must not be counted twice. Over-asking throws
-         * "Cannot fulfill more items than what was ordered", which would strand
-         * the event permanently.
-         */
-        const itemsForParcel = (shipment: (typeof plan.shipments)[number]) => {
-          // No breakdown (older or partial payloads): fall back to the whole
-          // order, still clamped, rather than crashing.
-          const requested =
-            shipment.items === undefined
-              ? (orderRow.items ?? []).map((i) => ({
-                  id: i.id,
-                  quantity: Number(i.quantity),
-                }))
-              : shipment.items.flatMap((pi) => {
-                  const medusaId = printfulItemToMedusaItem.get(pi.item_id)
-                  return medusaId
-                    ? [{ id: medusaId, quantity: Number(pi.quantity) }]
-                    : []
-                })
-
-          // Merged by line id: several bundle members in one parcel all resolve
-          // to the same Medusa line, and two entries for one line in a single
-          // fulfillment is not something Medusa expects.
-          const clamped = new Map<string, number>()
-          for (const req of requested) {
-            const open = remaining.get(req.id) ?? 0
-            const quantity = Math.min(req.quantity, open)
-            if (quantity > 0) {
-              clamped.set(req.id, (clamped.get(req.id) ?? 0) + quantity)
-              remaining.set(req.id, open - quantity)
-            }
-          }
-          return [...clamped].map(([id, quantity]) => ({ id, quantity }))
-        }
+        // Which Medusa line quantities each new parcel fulfils. Joins
+        // Printful's per-parcel breakdown back to Medusa lines through the
+        // external_id create-printful-order stamps on every item, counts a
+        // bundle as shipped only once all its members have, and clamps to what
+        // Medusa still has open — see planParcelItems.
+        const parcelItems = planParcelItems({
+          orderLines: (orderRow.items ?? []).map((item) => ({
+            id: item.id,
+            quantity: Number(item.quantity),
+            fulfilled_quantity: Number(item.detail?.fulfilled_quantity ?? 0),
+          })),
+          printfulItems: (pfOrder.items ?? []).map((item) => ({
+            id: item.id as number,
+            external_id: item.external_id,
+            quantity: Number(item.quantity),
+          })),
+          parcels,
+          recorded: new Set(recorded),
+        })
 
         let created = 0
         const skipped: string[] = []
         for (const shipment of plan.shipments) {
-          const items = itemsForParcel(shipment)
+          const items = parcelItems.get(shipment.printful_shipment_id) ?? []
 
-          // Nothing left open for this parcel — a reshipment, or units already
-          // fulfilled. Record it and move on instead of throwing.
+          // Nothing left open for this parcel — a reshipment, units already
+          // fulfilled, or part of a bundle still waiting on other members.
+          // Record it and move on instead of throwing.
           if (!items.length) {
             skipped.push(shipment.printful_shipment_id)
             continue
           }
 
-          const labels = shipment.tracking_number
-            ? [
-                {
-                  tracking_number: shipment.tracking_number,
-                  tracking_url: shipment.tracking_url ?? "",
-                  // Printful's v1 Shipment schema exposes no customer-facing
-                  // label URL. Empty beats a plausible-looking wrong link.
-                  label_url: "",
-                },
-              ]
-            : []
+          const labels = labelsFor(shipment)
 
           // Each unrecorded Printful shipment gets its OWN fulfillment: Printful
           // splits orders across facilities, so one fulfillment must never close
@@ -301,6 +267,7 @@ const applyStep = createStep(
         return new StepResponse<ApplyResult>({
           status: "processed",
           shipments_created: created,
+          shipments_repaired: repaired,
         })
       })
     } catch (err) {

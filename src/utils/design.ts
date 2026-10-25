@@ -413,12 +413,47 @@ export class CatalogVariantCache {
     Promise<PrintfulCatalogVariant | null>
   >()
   private made = 0
+  private active = 0
+  private readonly waiting: Array<() => void> = []
+  private readonly maxConcurrent: number
 
   constructor(
     private readonly fetchVariant: (
       catalogVariantId: string
-    ) => Promise<PrintfulCatalogVariant | null>
-  ) {}
+    ) => Promise<PrintfulCatalogVariant | null>,
+    options: {
+      /**
+       * Catalog calls allowed in flight at once. Default 4.
+       *
+       * The enrichment fans out over every colour of a product in parallel.
+       * Unbounded, an 84-colour tee was 84 simultaneous requests — far past
+       * Printful's rate limit — and each 429 came back as a cached blank.
+       */
+      maxConcurrent?: number
+    } = {}
+  ) {
+    this.maxConcurrent = Math.max(1, Math.floor(options.maxConcurrent ?? 4))
+  }
+
+  private async limited<T>(task: () => Promise<T>): Promise<T> {
+    if (this.active >= this.maxConcurrent) {
+      // The finishing task hands its slot over directly, so a newcomer cannot
+      // slip in between the release and the waiter resuming.
+      await new Promise<void>((resolve) => this.waiting.push(resolve))
+    } else {
+      this.active += 1
+    }
+    try {
+      return await task()
+    } finally {
+      const next = this.waiting.shift()
+      if (next) {
+        next()
+      } else {
+        this.active -= 1
+      }
+    }
+  }
 
   /** How many catalog calls were actually issued. For logging and tests. */
   get calls(): number {
@@ -437,9 +472,9 @@ export class CatalogVariantCache {
     this.made += 1
     // Never let a rejection escape: this is a best-effort enrichment and the
     // sync must survive a catalog that throws rather than returns null.
-    const pending = this.fetchVariant(String(catalogVariantId)).catch(
-      () => null
-    )
+    const pending = this.limited(() =>
+      this.fetchVariant(String(catalogVariantId))
+    ).catch(() => null)
     this.entries.set(key, pending)
     return pending
   }

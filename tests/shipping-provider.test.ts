@@ -46,7 +46,7 @@ const CONTEXT = {
     postal_code: "91311",
     address_1: "19749 Dearborn St",
   },
-  items: [{ variant: { id: "var_1" }, quantity: 1, unit_price: 2500 }],
+  items: [{ variant: { id: "var_1" }, quantity: 1, unit_price: 25 }],
 } as never
 
 function makeProvider(opts: {
@@ -65,7 +65,7 @@ function makeProvider(opts: {
     {
       apiToken: "token",
       liveShippingRates: true,
-      fallbackShippingRates: opts.fallback ?? { STANDARD: 700 },
+      fallbackShippingRates: opts.fallback ?? { STANDARD: 7 },
     } as never
   )
   if (opts.getShippingRates) {
@@ -92,7 +92,7 @@ describe("calculatePrice", () => {
       CONTEXT
     )
 
-    expect(result.calculated_amount).toBe(499)
+    expect(result.calculated_amount).toBe(4.99)
     expect(result.is_calculated_price_tax_inclusive).toBe(false)
   })
 
@@ -109,7 +109,7 @@ describe("calculatePrice", () => {
       CONTEXT
     )
 
-    expect(result.calculated_amount).toBe(700)
+    expect(result.calculated_amount).toBe(7)
     expect(logger.warn).toHaveBeenCalled()
   })
 
@@ -118,7 +118,7 @@ describe("calculatePrice", () => {
       getShippingRates: vi.fn().mockResolvedValue(RATES),
       query: makeQuery(),
       cache: makeCache(),
-      fallback: { EXPRESS: 1500 },
+      fallback: { EXPRESS: 15 },
     })
 
     const result = await service.calculatePrice(
@@ -127,7 +127,7 @@ describe("calculatePrice", () => {
       CONTEXT
     )
 
-    expect(result.calculated_amount).toBe(1500)
+    expect(result.calculated_amount).toBe(15)
   })
 
   it("never calls Printful when the address is incomplete", async () => {
@@ -145,7 +145,7 @@ describe("calculatePrice", () => {
     )
 
     expect(getShippingRates).not.toHaveBeenCalled()
-    expect(result.calculated_amount).toBe(700)
+    expect(result.calculated_amount).toBe(7)
   })
 
   it("never calls Printful when no line resolves to a Printful variant", async () => {
@@ -167,7 +167,7 @@ describe("calculatePrice", () => {
     )
 
     expect(getShippingRates).not.toHaveBeenCalled()
-    expect(result.calculated_amount).toBe(700)
+    expect(result.calculated_amount).toBe(7)
   })
 
   it("falls back when query is unavailable", async () => {
@@ -185,7 +185,7 @@ describe("calculatePrice", () => {
     )
 
     expect(getShippingRates).not.toHaveBeenCalled()
-    expect(result.calculated_amount).toBe(700)
+    expect(result.calculated_amount).toBe(7)
     expect(logger.error).toHaveBeenCalled()
   })
 
@@ -246,7 +246,7 @@ describe("calculatePrice", () => {
       CONTEXT
     )
 
-    expect(result.calculated_amount).toBe(499)
+    expect(result.calculated_amount).toBe(4.99)
   })
 
   it("prefers a stale quote over the flat rate", async () => {
@@ -281,8 +281,8 @@ describe("calculatePrice", () => {
       CONTEXT
     )
 
-    // 499 from the stale quote, not 700 from the flat rate.
-    expect(result.calculated_amount).toBe(499)
+    // 4.99 from the stale quote, not 7 from the flat rate.
+    expect(result.calculated_amount).toBe(4.99)
   })
 
   it("does not treat inherited object keys as configured rates", async () => {
@@ -292,7 +292,7 @@ describe("calculatePrice", () => {
       {
         apiToken: "token",
         liveShippingRates: true,
-        fallbackShippingRates: { STANDARD: 700 },
+        fallbackShippingRates: { STANDARD: 7 },
       } as never
     )
 
@@ -315,7 +315,7 @@ describe("calculatePrice", () => {
         apiToken: "token",
         liveShippingRates: true,
         // A rate that came from JSON or an env var arrives as a string.
-        fallbackShippingRates: { STANDARD: "700" },
+        fallbackShippingRates: { STANDARD: "7" },
       } as never
     )
 
@@ -355,7 +355,7 @@ describe("calculatePrice", () => {
 
     // Printful is healthy — a bad cache entry must not stop us asking it.
     expect(getShippingRates).toHaveBeenCalledTimes(1)
-    expect(result.calculated_amount).toBe(499)
+    expect(result.calculated_amount).toBe(4.99)
   })
 
   it("does not serve a future-dated cache entry as fresh", async () => {
@@ -404,7 +404,7 @@ describe("calculatePrice", () => {
       CONTEXT
     )
 
-    expect(result.calculated_amount).toBe(700)
+    expect(result.calculated_amount).toBe(7)
     expect(getShippingRates).not.toHaveBeenCalled()
     // Our database, not Printful — the log must not send the operator to
     // Printful's status page during their own incident.
@@ -427,10 +427,10 @@ describe("calculatePrice", () => {
 
     // No Printful items resolve, so this is the flat rate. Assert the *route*,
     // not just the amount: without the Array.isArray guard the object is not
-    // iterable, and the amount is still 700 — but it arrives via a thrown
+    // iterable, and the amount is still 7 — but it arrives via a thrown
     // TypeError rather than a clean no_printful_items skip. Requiring a silent
     // error log is what distinguishes the two paths.
-    expect(result.calculated_amount).toBe(700)
+    expect(result.calculated_amount).toBe(7)
     expect(logger.error).not.toHaveBeenCalled()
   })
 
@@ -461,7 +461,7 @@ describe("calculatePrice", () => {
       {
         apiToken: "token",
         liveShippingRates: true,
-        fallbackShippingRates: { STANDARD: 700 },
+        fallbackShippingRates: { STANDARD: 7 },
         shippingRateCacheTtlSeconds: 900,
         shippingRateStaleSeconds: 300,
       } as never
@@ -864,5 +864,63 @@ describe("validateFulfillmentData confirmation", () => {
       )
       expect(result).toHaveProperty("printful_option_id", "STANDARD")
     }
+  })
+})
+
+describe("checkout latency budget", () => {
+  it("builds its client with a short retry budget", () => {
+    // calculatePrice runs inside the customer's request. Three retries that
+    // each honour a long Retry-After would stall checkout for minutes.
+    const { service } = makeProvider({})
+    const client = (
+      service as never as {
+        client_: { maxRetries: number; maxRetryDelayMs: number }
+      }
+    ).client_
+    expect(client.maxRetries).toBeLessThanOrEqual(1)
+    expect(client.maxRetryDelayMs).toBeLessThanOrEqual(2_000)
+  })
+})
+
+describe("fulfillment cancellation", () => {
+  function withCancelSpy() {
+    const { service, logger } = makeProvider({})
+    const cancelOrder = vi.fn().mockResolvedValue({})
+    ;(service as never as { client_: unknown }).client_ = { cancelOrder }
+    return { service, logger, cancelOrder }
+  }
+
+  it("tags a parcel fulfillment with its Printful shipment", async () => {
+    const { service } = withCancelSpy()
+    const result = await service.createFulfillment(
+      {},
+      [],
+      { id: "order_1" } as never,
+      {
+        metadata: { printful_order_id: "777", printful_shipment_id: "s1" },
+      } as never
+    )
+    expect(result.data).toMatchObject({
+      printful_order_id: "777",
+      printful_shipment_id: "s1",
+    })
+  })
+
+  it("never cancels the whole Printful order for one parcel", async () => {
+    // One fulfillment per parcel. Canceling a parcel's record in Medusa used
+    // to DELETE the entire Printful order — every other parcel with it.
+    const { service, cancelOrder, logger } = withCancelSpy()
+    await service.cancelFulfillment({
+      printful_order_id: "777",
+      printful_shipment_id: "s1",
+    })
+    expect(cancelOrder).not.toHaveBeenCalled()
+    expect(logger.warn).toHaveBeenCalled()
+  })
+
+  it("still cancels an order-level fulfillment", async () => {
+    const { service, cancelOrder } = withCancelSpy()
+    await service.cancelFulfillment({ printful_order_id: "777" })
+    expect(cancelOrder).toHaveBeenCalledWith("777")
   })
 })

@@ -1,6 +1,6 @@
 import { createHash } from "crypto"
 import { minorUnitFactor } from "./currency"
-import { parsePriceToMinorUnits } from "./mappers"
+import { parsePriceToAmount } from "./mappers"
 import type {
   CachedQuote,
   FallbackReason,
@@ -87,8 +87,9 @@ export type RateSelection =
 /**
  * Pick one method out of a quote list.
  *
- * Printful sends `rate` as a decimal string; `parsePriceToMinorUnits` rounds it
- * correctly, where `parseFloat("4.99") * 100` would yield 498.99999999999994.
+ * Printful sends `rate` as a decimal string. The amount returned is a Medusa
+ * amount — main units, so "4.99" is 4.99. Medusa reads `calculated_amount`
+ * as-is; returning 499 charged the customer $499 for shipping.
  *
  * A quote in a currency the cart cannot use is rejected rather than converted —
  * we never source an exchange rate ourselves.
@@ -119,7 +120,7 @@ export function selectRate(
   // Scaled by the quote's own currency. The equality check above already
   // proved it matches the cart's, so either code would do — the quote's is
   // used because it is the currency the rate string is actually denominated in.
-  return { ok: true, amount: parsePriceToMinorUnits(match.rate, quoteCurrency) }
+  return { ok: true, amount: parsePriceToAmount(match.rate, quoteCurrency) }
 }
 
 /** What `shipping_method.data.rate_source` may hold after confirmation. */
@@ -274,8 +275,30 @@ export function isAddressQuotable(address: {
 export type CartLineForRates = {
   variant_id: string
   quantity: number
-  /** Minor units, from the cart line item. */
+  /**
+   * The cart line's unit price as Medusa holds it: main units ($19.99 is
+   * 19.99). May arrive as a serialized BigNumber rather than a number.
+   */
   unit_price?: number
+}
+
+/** A Medusa amount that may be a number, a numeric string, or a BigNumber. */
+function amountToNumber(value: unknown): number | undefined {
+  if (value == null) {
+    return undefined
+  }
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : undefined
+  }
+  if (typeof value === "string") {
+    const n = Number(value)
+    return Number.isFinite(n) ? n : undefined
+  }
+  if (typeof value === "object") {
+    const v = value as { numeric?: unknown; value?: unknown }
+    return amountToNumber(v.numeric ?? v.value)
+  }
+  return undefined
 }
 
 /**
@@ -431,10 +454,10 @@ export function buildRateRequest(
  * catalog id are skipped: that covers non-Printful products in a mixed store,
  * and Printful variants synced before the mapper recorded that id.
  *
- * `unit_price` is minor units in the cart's currency and `value` is the decimal
- * string Printful expects, so the conversion out is the currency's factor and
- * the decimal count is the currency's too. A ¥1500 line sends "1500": dividing
- * it by 100 would declare a ¥15 parcel to customs and quote its shipping.
+ * `unit_price` is a Medusa amount — already in main units — and `value` is the
+ * decimal string Printful expects, so it is formatted, never divided: with the
+ * currency's own number of decimals ("1500" for yen, "19.99" for dollars,
+ * "1.234" for dinars). Dividing by 100 declared a $15 parcel as $0.15.
  */
 export function buildRateItems(
   lines: CartLineForRates[],
@@ -442,10 +465,8 @@ export function buildRateItems(
   cartCurrency?: string
 ): ShippingRateItem[] {
   const items: ShippingRateItem[] = []
-  const factor = minorUnitFactor(cartCurrency)
-  // 100 → 2 decimals, 1 → 0. Printful reads the string as a decimal number, so
-  // "1500.00" for yen would be as wrong as it is malformed.
-  const decimals = factor === 1 ? 0 : 2
+  // 1 → 0 decimals, 100 → 2, 1000 → 3. "1500.00" for yen would be malformed.
+  const decimals = Math.round(Math.log10(minorUnitFactor(cartCurrency)))
 
   for (const line of lines) {
     const catalogId = catalogIdByVariantId.get(line.variant_id)
@@ -469,11 +490,12 @@ export function buildRateItems(
       continue
     }
 
+    const unitPrice = amountToNumber(line.unit_price)
     items.push({
       variant_id: parsed,
       quantity,
-      ...(line.unit_price != null
-        ? { value: (line.unit_price / factor).toFixed(decimals) }
+      ...(unitPrice != null && unitPrice >= 0
+        ? { value: unitPrice.toFixed(decimals) }
         : {}),
     })
   }

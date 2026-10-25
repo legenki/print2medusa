@@ -3,7 +3,7 @@ import {
   applyMarkup,
   diffVariantsForUpsert,
   mapSyncProductToMedusa,
-  parsePriceToMinorUnits,
+  parsePriceToAmount,
   resolveStateCode,
   slugify,
 } from "../src/utils/mappers"
@@ -48,20 +48,22 @@ describe("mappers", () => {
     expect(slugify("Cool Tee!")).toBe("cool-tee")
   })
 
-  it("parses prices to minor units", () => {
-    expect(parsePriceToMinorUnits("25.00")).toBe(2500)
-    expect(parsePriceToMinorUnits("25.5")).toBe(2550)
-    expect(parsePriceToMinorUnits(null)).toBe(0)
+  // Medusa v2 stores money in the currency's main unit: $25.00 is 25, not
+  // 2500 (the admin formats `amount` as-is; payment providers multiply it up
+  // to the smallest unit themselves). Writing cents makes a $25 tee cost $2500.
+  it("parses prices to Medusa amounts in the main unit", () => {
+    expect(parsePriceToAmount("25.00")).toBe(25)
+    expect(parsePriceToAmount("25.5")).toBe(25.5)
+    expect(parsePriceToAmount("4.99", "USD")).toBe(4.99)
+    expect(parsePriceToAmount(null)).toBe(0)
+    expect(parsePriceToAmount("abc")).toBe(0)
   })
 
-  it("leaves a zero-decimal price at its major unit", () => {
-    expect(parsePriceToMinorUnits("1500", "JPY")).toBe(1500)
-    expect(parsePriceToMinorUnits("1500", "jpy")).toBe(1500)
-  })
-
-  it("still scales a two-decimal price", () => {
-    expect(parsePriceToMinorUnits("25.00", "USD")).toBe(2500)
-    expect(parsePriceToMinorUnits("1500", "USD")).toBe(150000)
+  it("rounds to the currency's own precision", () => {
+    expect(parsePriceToAmount("1500", "JPY")).toBe(1500)
+    expect(parsePriceToAmount("1500.4", "jpy")).toBe(1500)
+    expect(parsePriceToAmount("1.2345", "KWD")).toBe(1.235)
+    expect(parsePriceToAmount("25.005", "USD")).toBe(25.01)
   })
 
   it("maps a JPY sync product without inflating its price", () => {
@@ -79,15 +81,15 @@ describe("mappers", () => {
     })
   })
 
-  it("applies markup to a zero-decimal amount without rescaling it", () => {
-    // applyMarkup multiplies by a ratio, so it is unit-agnostic: 1500 JPY
-    // minor units plus 30% is 1950 JPY minor units, same arithmetic as cents.
-    expect(applyMarkup(1500, 30)).toBe(1950)
+  it("applies markup to a zero-decimal amount without fractional yen", () => {
+    expect(applyMarkup(1500, 30, "JPY")).toBe(1950)
+    expect(applyMarkup(999, 15, "JPY")).toBe(1149)
   })
 
-  it("applies markup", () => {
-    expect(applyMarkup(1000, 30)).toBe(1300)
-    expect(applyMarkup(1000)).toBe(1000)
+  it("applies markup and rounds to cents", () => {
+    expect(applyMarkup(25, 30, "USD")).toBe(32.5)
+    expect(applyMarkup(19.99, 15, "USD")).toBe(22.99)
+    expect(applyMarkup(10)).toBe(10)
   })
 
   it("maps sync product to Medusa product input", () => {
@@ -101,7 +103,7 @@ describe("mappers", () => {
     expect(mapped.metadata.printful_sync_product_id).toBe("100")
     expect(mapped.options.map((o) => o.title).sort()).toEqual(["Color", "Size"])
     expect(mapped.variants).toHaveLength(2)
-    expect(mapped.variants[0].prices[0].amount).toBe(2500)
+    expect(mapped.variants[0].prices[0].amount).toBe(25)
     expect(mapped.variants[0].metadata.printful_sync_variant_id).toBe("1001")
     expect(mapped.variants[0].options.Size).toBe("M")
     expect(mapped.variants[0].options.Color).toBe("Black")

@@ -1,6 +1,7 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import { Modules } from "@medusajs/framework/utils"
 import { summarizeProductDesign } from "../../../../utils/design"
+import { listAllProducts } from "../../../../utils/list-products"
 
 /**
  * Design parameters per product, read from the variant metadata the sync
@@ -17,10 +18,7 @@ import { summarizeProductDesign } from "../../../../utils/design"
 export async function GET(req: MedusaRequest, res: MedusaResponse) {
   const productModule = req.scope.resolve(Modules.PRODUCT)
 
-  const products = await productModule.listProducts(
-    {},
-    { relations: ["variants"], take: 100 }
-  )
+  const products = await listAllProducts(productModule)
 
   const designs = products
     .map((product) => {

@@ -43,7 +43,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
   // of this release is that the admin gets an answer immediately rather than
   // holding the request open for a 500-product catalog. The scheduled job in
   // src/jobs/sync-products.ts DOES await the same workflow — it serves no HTTP
-  // response and wants the counters to log.
+  // response.
   void syncProductsWorkflow(req.scope)
     .run({
       input: {
@@ -51,12 +51,16 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         limit: Number.isFinite(limit) ? limit : undefined,
       },
     })
-    .catch((err) => {
+    .catch(async (err) => {
       logger.error(
         `Printful sync ${claim.id} failed to start: ${
           err instanceof Error ? err.message : String(err)
         }`
       )
+      // Otherwise the claim stays `running` and blocks every sync for an hour.
+      await printful
+        .failRunningSyncLog(claim.id, "workflow_failed_to_start")
+        .catch(() => undefined)
     })
 
   res.status(202).json({ sync_id: claim.id })

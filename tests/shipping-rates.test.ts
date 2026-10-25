@@ -170,22 +170,15 @@ const rates: ShippingInfo[] = [
 ]
 
 describe("selectRate", () => {
-  it("finds the method and converts to minor units", () => {
+  it("finds the method and returns a Medusa amount in the main unit", () => {
+    // Medusa v2 reads calculated_amount as-is: 499 would be $499 shipping.
     expect(selectRate(rates, "STANDARD", "USD")).toEqual({
       ok: true,
-      amount: 499,
-    })
-  })
-
-  it("converts without float drift", () => {
-    // parseFloat("4.99") * 100 is 498.99999999999994
-    expect(selectRate(rates, "STANDARD", "USD")).toEqual({
-      ok: true,
-      amount: 499,
+      amount: 4.99,
     })
     expect(selectRate(rates, "EXPRESS", "USD")).toEqual({
       ok: true,
-      amount: 1550,
+      amount: 15.5,
     })
   })
 
@@ -206,7 +199,7 @@ describe("selectRate", () => {
   it("compares currency case-insensitively", () => {
     expect(selectRate(rates, "STANDARD", "usd")).toEqual({
       ok: true,
-      amount: 499,
+      amount: 4.99,
     })
   })
 
@@ -319,8 +312,8 @@ describe("buildRateItems", () => {
   it("builds items from variants carrying a catalog id", () => {
     const items = buildRateItems(
       [
-        { variant_id: "var_1", quantity: 2, unit_price: 2500 },
-        { variant_id: "var_2", quantity: 1, unit_price: 1000 },
+        { variant_id: "var_1", quantity: 2, unit_price: 25 },
+        { variant_id: "var_2", quantity: 1, unit_price: 10 },
       ],
       new Map([
         ["var_1", "4012"],
@@ -336,8 +329,8 @@ describe("buildRateItems", () => {
   it("skips variants with no catalog id", () => {
     const items = buildRateItems(
       [
-        { variant_id: "var_1", quantity: 1, unit_price: 500 },
-        { variant_id: "var_other", quantity: 1, unit_price: 500 },
+        { variant_id: "var_1", quantity: 1, unit_price: 5 },
+        { variant_id: "var_other", quantity: 1, unit_price: 5 },
       ],
       new Map([["var_1", "4012"]])
     )
@@ -351,9 +344,9 @@ describe("buildRateItems", () => {
     ).toEqual([])
   })
 
-  it("sends a zero-decimal line value without dividing it", () => {
-    // The cart line is ¥1500. Sending "15.00" under-reports the parcel by a
-    // hundredfold, which skews the shipping quote and the customs declaration.
+  it("sends a zero-decimal line value without decimals", () => {
+    // The cart line is ¥1500, which Medusa stores as 1500. "1500.00" would be
+    // as malformed for yen as "15.00" would be wrong.
     const items = buildRateItems(
       [{ variant_id: "var_1", quantity: 1, unit_price: 1500 }],
       new Map([["var_1", "4012"]]),
@@ -362,13 +355,40 @@ describe("buildRateItems", () => {
     expect(items).toEqual([{ variant_id: 4012, quantity: 1, value: "1500" }])
   })
 
-  it("still divides a two-decimal line value", () => {
+  it("sends a two-decimal line value as-is, never divided", () => {
+    // Medusa v2 already stores $15 as 15. Dividing by 100 declared a $15
+    // parcel to customs as $0.15.
     const items = buildRateItems(
-      [{ variant_id: "var_1", quantity: 1, unit_price: 1500 }],
+      [{ variant_id: "var_1", quantity: 1, unit_price: 15 }],
       new Map([["var_1", "4012"]]),
       "USD"
     )
     expect(items[0].value).toBe("15.00")
+  })
+
+  it("keeps three decimals for a three-decimal currency", () => {
+    const items = buildRateItems(
+      [{ variant_id: "var_1", quantity: 1, unit_price: 1.234 }],
+      new Map([["var_1", "4012"]]),
+      "KWD"
+    )
+    expect(items[0].value).toBe("1.234")
+  })
+
+  it("reads a BigNumber-shaped unit price", () => {
+    // Cart contexts can carry Medusa's serialized BigNumber, not a number.
+    const items = buildRateItems(
+      [
+        {
+          variant_id: "var_1",
+          quantity: 1,
+          unit_price: { value: "19.99", numeric: 19.99 } as unknown as number,
+        },
+      ],
+      new Map([["var_1", "4012"]]),
+      "USD"
+    )
+    expect(items[0].value).toBe("19.99")
   })
 
   it("omits value when the unit price is unknown", () => {
@@ -427,11 +447,11 @@ describe("buildRateItems", () => {
     }
   })
 
-  it("formats value from minor units, including the single-cent boundary", () => {
+  it("formats value at the single-cent boundary", () => {
     const catalog = new Map([["var_1", "4012"]])
     expect(
       buildRateItems(
-        [{ variant_id: "var_1", quantity: 1, unit_price: 1 }],
+        [{ variant_id: "var_1", quantity: 1, unit_price: 0.01 }],
         catalog
       )[0].value
     ).toBe("0.01")
@@ -726,7 +746,7 @@ describe("cache key agreement between pricing and confirmation", () => {
       product: { shipping_profile: { id: "sp_printful" } },
     },
     quantity: 1,
-    unit_price: 2500,
+    unit_price: 25,
   }
   const otherItem = {
     variant: {
@@ -734,7 +754,7 @@ describe("cache key agreement between pricing and confirmation", () => {
       product: { shipping_profile: { id: "sp_bulky" } },
     },
     quantity: 1,
-    unit_price: 9900,
+    unit_price: 99,
   }
 
   it("reads the same lines whether or not the caller pre-filtered", () => {

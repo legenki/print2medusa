@@ -370,4 +370,35 @@ describe("sync claim", () => {
       expect(log.status).toBe("success")
     })
   })
+
+  describe("failing a sync whose workflow failed", () => {
+    it("marks a running sync failed and frees the claim", async () => {
+      const claim = await service.claimSyncLog(60)
+
+      expect(
+        await service.failRunningSyncLog(claim!.id, "workflow_failed")
+      ).toBe(true)
+
+      const log = await service.retrievePrintfulSyncLog(claim!.id)
+      expect(log.status).toBe("failed")
+      expect(log.error_message).toBe("workflow_failed")
+      expect(log.finished_at).not.toBeNull()
+      expect(await service.claimSyncLog(60)).not.toBeNull()
+    })
+
+    it("leaves a sync that already finished alone", async () => {
+      const claim = await service.claimSyncLog(60)
+      await service.updatePrintfulSyncLogs({
+        id: claim!.id,
+        status: "success",
+        finished_at: new Date(),
+      })
+
+      expect(
+        await service.failRunningSyncLog(claim!.id, "workflow_failed")
+      ).toBe(false)
+      const log = await service.retrievePrintfulSyncLog(claim!.id)
+      expect(log.status).toBe("success")
+    })
+  })
 })

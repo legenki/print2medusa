@@ -14,7 +14,10 @@ export type PrintfulPluginOptions = {
   webhookSecret?: string
   /** Enable live shipping rates. Requires fallbackShippingRates. */
   liveShippingRates?: boolean
-  /** Flat rate per method id, in minor units. Required when live rates are on. */
+  /**
+   * Flat rate per method id, as a Medusa amount in the main unit (5 is $5.00,
+   * 800 is ¥800). Required when live rates are on.
+   */
   fallbackShippingRates?: Record<string, number>
   /** How long a quote counts as fresh. Default 600. */
   shippingRateCacheTtlSeconds?: number
@@ -34,6 +37,18 @@ export type PrintfulPluginOptions = {
    * Never deletes products. Skipped when the sync runs with `limit` (partial).
    */
   onRemovedFromPrintful?: "unpublish" | "ignore"
+  /**
+   * Sales channels newly imported products are added to. Default: the store's
+   * default sales channel. Without one, the Store API never lists a product.
+   * Applied on creation only — channels a merchant changes later are kept.
+   */
+  salesChannelIds?: string[]
+  /**
+   * Shipping profile newly imported products are assigned. Default: the
+   * store's `default` shipping profile. Without one, a cart offers the product
+   * no shipping option. Applied on creation only.
+   */
+  shippingProfileId?: string
   /**
    * Per-attempt deadline for every Printful request, in ms. Default 15000.
    *
