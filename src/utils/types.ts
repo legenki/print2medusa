@@ -1,3 +1,5 @@
+import type { ConvertedPriceRounding } from "./fx"
+
 export type PrintfulPluginOptions = {
   apiToken: string
   storeId?: string
@@ -11,6 +13,21 @@ export type PrintfulPluginOptions = {
   defaultCurrency?: string
   /** Markup percent applied to Printful retail prices on sync */
   markupPercent?: number
+  /**
+   * Currencies to price every variant in besides the Printful store's own,
+   * e.g. `["eur"]`. Converted on each sync at the European Central Bank's
+   * daily reference rate. A Medusa region in a currency with no price shows
+   * the product at zero, so add one entry per region currency.
+   *
+   * If the rates cannot be fetched, a sync leaves existing prices untouched.
+   */
+  additionalCurrencies?: string[]
+  /**
+   * How converted prices are rounded. Default `"charm"`: up to the next .99
+   * (€22.35 → €22.99), never below the exact conversion. `"whole"` rounds up
+   * to a whole unit; `"exact"` keeps the conversion to the cent.
+   */
+  convertedPriceRounding?: ConvertedPriceRounding
   webhookSecret?: string
   /** Enable live shipping rates. Requires fallbackShippingRates. */
   liveShippingRates?: boolean

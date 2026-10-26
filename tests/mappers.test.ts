@@ -307,3 +307,120 @@ describe("mapSyncProductToMedusa stock", () => {
     expect(mapped.status).toBe("draft")
   })
 })
+
+describe("mapSyncProductToMedusa multi-currency", () => {
+  const rates = { date: "2026-10-26", perEur: { EUR: 1, USD: 1.1188 } }
+
+  it("adds a converted price for each additional currency", () => {
+    // Printful prices in the store's currency only. A region in euros with no
+    // euro price shows the product at zero.
+    const mapped = mapSyncProductToMedusa(sample, {
+      markupPercent: 0,
+      additionalCurrencies: ["eur"],
+      fxRates: rates,
+    })
+    expect(mapped.variants[0].prices).toEqual([
+      { amount: 25, currency_code: "usd" },
+      // $25 / 1.1188 = €22.35 → charm-rounded up to €22.99
+      { amount: 22.99, currency_code: "eur" },
+    ])
+    expect(mapped.pricesComplete).toBe(true)
+  })
+
+  it("converts after markup, so both currencies carry it", () => {
+    const mapped = mapSyncProductToMedusa(sample, {
+      markupPercent: 20,
+      additionalCurrencies: ["EUR"],
+      fxRates: rates,
+      convertedPriceRounding: "exact",
+    })
+    expect(mapped.variants[0].prices).toEqual([
+      { amount: 30, currency_code: "usd" },
+      { amount: 26.81, currency_code: "eur" },
+    ])
+  })
+
+  it("flags the prices incomplete when there is no rate to convert with", () => {
+    const mapped = mapSyncProductToMedusa(sample, {
+      additionalCurrencies: ["eur"],
+      fxRates: null,
+    })
+    expect(mapped.variants[0].prices).toEqual([
+      { amount: 25, currency_code: "usd" },
+    ])
+    expect(mapped.pricesComplete).toBe(false)
+  })
+
+  it("skips an additional currency equal to the base one", () => {
+    const mapped = mapSyncProductToMedusa(sample, {
+      additionalCurrencies: ["usd"],
+      fxRates: null,
+    })
+    expect(mapped.variants[0].prices).toHaveLength(1)
+    expect(mapped.pricesComplete).toBe(true)
+  })
+})
+
+describe("mapSyncProductToMedusa presentation", () => {
+  it("titles a variant by its options, not the product name again", () => {
+    // Printful names a variant "Unisex t-shirt / Heather Slate / L"; next to
+    // the product title in a cart that reads twice.
+    const mapped = mapSyncProductToMedusa(sample)
+    expect(mapped.variants.map((v) => v.title)).toEqual([
+      "Black / M",
+      "Black / L",
+    ])
+  })
+
+  it("lists Color before Size", () => {
+    const mapped = mapSyncProductToMedusa(sample)
+    expect(mapped.options.map((o) => o.title)).toEqual(["Color", "Size"])
+  })
+
+  it("records each variant's own mockup for the storefront", () => {
+    const mapped = mapSyncProductToMedusa(sample)
+    expect(mapped.variants[0].metadata.printful_preview_url).toBe(
+      "https://cdn.example/v1.png"
+    )
+    expect(mapped.variants[1].metadata.printful_preview_url).toBeUndefined()
+  })
+
+  it("prefers the preview file's mockup over a print file", () => {
+    const mapped = mapSyncProductToMedusa({
+      ...sample,
+      sync_variants: [
+        {
+          ...sample.sync_variants[0],
+          files: [
+            { type: "default", preview_url: "https://cdn.example/art.png" },
+            { type: "preview", preview_url: "https://cdn.example/mock.png" },
+          ],
+        },
+      ],
+    })
+    expect(mapped.variants[0].metadata.printful_preview_url).toBe(
+      "https://cdn.example/mock.png"
+    )
+  })
+})
+
+describe("variant names without size and colour fields", () => {
+  it("takes colour and size from the last two parts of the name", () => {
+    const mapped = mapSyncProductToMedusa({
+      ...sample,
+      sync_variants: [
+        {
+          ...sample.sync_variants[0],
+          name: "Unisex t-shirt / Heather Slate / L",
+          size: null,
+          color: null,
+        },
+      ],
+    })
+    expect(mapped.variants[0].options).toEqual({
+      Color: "Heather Slate",
+      Size: "L",
+    })
+    expect(mapped.variants[0].title).toBe("Heather Slate / L")
+  })
+})

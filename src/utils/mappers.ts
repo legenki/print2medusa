@@ -4,6 +4,7 @@ import type {
   PrintfulSyncVariant,
 } from "./types"
 import { minorUnitFactor } from "./currency"
+import { convertPrice, type ConvertedPriceRounding, type FxRates } from "./fx"
 import { DISCONTINUED_MARKER_KEY, planStockActions } from "./stock"
 
 export type MedusaProductOptionInput = {
@@ -31,6 +32,12 @@ export type MedusaProductInput = {
   variants: MedusaVariantInput[]
   metadata: Record<string, unknown>
   external_id?: string
+  /**
+   * False when an additional currency could not be priced — no rate was
+   * available. The sync must then leave existing prices alone rather than
+   * replace them with a set that silently drops the currency.
+   */
+  pricesComplete: boolean
 }
 
 const STATE_TABLES: Record<string, Record<string, string>> = {
@@ -331,12 +338,14 @@ function optionValuesFromVariants(variants: PrintfulSyncVariant[]): {
     perVariant.push(opts)
   }
 
+  // Colour first: it is the choice a shopper makes before size, and the
+  // order a storefront renders the pickers in.
   const options: MedusaProductOptionInput[] = []
-  if (sizes.size) {
-    options.push({ title: "Size", values: Array.from(sizes) })
-  }
   if (colors.size) {
     options.push({ title: "Color", values: Array.from(colors) })
+  }
+  if (sizes.size) {
+    options.push({ title: "Size", values: Array.from(sizes) })
   }
 
   const hasOnlyTitle = perVariant.every((o) => o.Title && !o.Size && !o.Color)
@@ -367,7 +376,11 @@ function optionValuesFromVariants(variants: PrintfulSyncVariant[]): {
 function parseNameOptions(name: string): { Size?: string; Color?: string } {
   const dash = name.split(" - ").pop()?.trim() ?? name
   if (dash.includes(" / ")) {
-    const [color, size] = dash.split(" / ").map((s) => s.trim())
+    // Printful writes both "Tee - Black / M" and "Tee / Black / M". Colour
+    // and size are always the last two parts; anything before is the product.
+    const parts = dash.split(" / ").map((s) => s.trim())
+    const size = parts[parts.length - 1]
+    const color = parts[parts.length - 2]
     return {
       ...(color ? { Color: color } : {}),
       ...(size ? { Size: size } : {}),
@@ -395,12 +408,47 @@ function collectImages(detail: PrintfulSyncProductDetail): string[] {
   return Array.from(urls)
 }
 
+/**
+ * A variant's title from its options — "Heather Slate / L" — rather than
+ * Printful's name, which repeats the product title ("Unisex t-shirt /
+ * Heather Slate / L") and reads twice next to it in a cart or an order.
+ */
+function variantTitle(
+  options: Record<string, string>,
+  fallback: string
+): string {
+  const parts = [options.Color, options.Size].filter(
+    (v): v is string => !!v && v !== "Default"
+  )
+  return parts.length ? parts.join(" / ") : fallback
+}
+
+/**
+ * The mockup of this variant — the shirt in this colour — for a storefront
+ * to show when the shopper picks it. Printful's `preview` file is the
+ * rendered mockup; other files are print artwork.
+ */
+function variantPreviewUrl(v: PrintfulSyncVariant): string | undefined {
+  const files = v.files ?? []
+  const preview = files.find((f) => f.type === "preview")
+  const pick = preview ?? files[0]
+  return pick?.preview_url || pick?.thumbnail_url || undefined
+}
+
 export function mapSyncProductToMedusa(
   detail: PrintfulSyncProductDetail,
   options: Pick<
     PrintfulPluginOptions,
-    "storeId" | "defaultCurrency" | "markupPercent" | "onDiscontinued"
-  > = {}
+    | "storeId"
+    | "defaultCurrency"
+    | "markupPercent"
+    | "onDiscontinued"
+    | "additionalCurrencies"
+    | "convertedPriceRounding"
+  > & {
+    /** Rates for `additionalCurrencies`; null when they could not be fetched. */
+    fxRates?: FxRates | null
+  } = {}
 ): MedusaProductInput {
   const { sync_product, sync_variants } = detail
   const stock = planStockActions(sync_variants)
@@ -411,6 +459,16 @@ export function mapSyncProductToMedusa(
     "USD"
   ).toLowerCase()
 
+  const extraCurrencies = [
+    ...new Set(
+      (options.additionalCurrencies ?? [])
+        .map((c) => String(c).trim().toLowerCase())
+        .filter((c) => c && c !== currency)
+    ),
+  ]
+  const rounding = options.convertedPriceRounding ?? "charm"
+  let pricesComplete = true
+
   const { options: productOptions, perVariant } =
     optionValuesFromVariants(sync_variants)
 
@@ -419,11 +477,24 @@ export function mapSyncProductToMedusa(
     // factor and the `currency_code` below can never disagree.
     const base = parsePriceToAmount(v.retail_price, currency)
     const amount = applyMarkup(base, options.markupPercent, currency)
+    const prices = [{ amount, currency_code: currency }]
+    for (const extra of extraCurrencies) {
+      const converted = options.fxRates
+        ? convertPrice(amount, currency, extra, options.fxRates, rounding)
+        : null
+      if (converted == null) {
+        pricesComplete = false
+      } else {
+        prices.push({ amount: converted, currency_code: extra })
+      }
+    }
+    const variantOptions = perVariant[i] ?? { Title: v.name }
+    const preview = variantPreviewUrl(v)
     return {
-      title: v.name,
+      title: variantTitle(variantOptions, v.name),
       sku: v.sku || `pf-${v.id}`,
-      options: perVariant[i] ?? { Title: v.name },
-      prices: [{ amount, currency_code: currency }],
+      options: variantOptions,
+      prices,
       manage_inventory: false,
       allow_backorder: true,
       metadata: {
@@ -435,6 +506,7 @@ export function mapSyncProductToMedusa(
           : undefined,
         printful_availability_status:
           stock.variantAvailability[String(v.id)] ?? "active",
+        ...(preview ? { printful_preview_url: preview } : {}),
       },
     }
   })
@@ -458,5 +530,6 @@ export function mapSyncProductToMedusa(
         ? { [DISCONTINUED_MARKER_KEY]: true }
         : {}),
     },
+    pricesComplete,
   }
 }

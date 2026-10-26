@@ -34,6 +34,7 @@ import {
 import { CatalogVariantCache, enrichVariantsWithDesign } from "../utils/design"
 import { planBundlePass, type ProductForBundlePass } from "../utils/bundle"
 import { resolveProductPlacement } from "../utils/placement"
+import { fetchEcbRates } from "../utils/fx"
 import { listAllProducts } from "../utils/list-products"
 import type {
   PrintfulSyncProductSummary,
@@ -239,6 +240,17 @@ const mapToMedusaProductsStep = createStep(
       logger.warn(`Printful sync: ${warning}`)
     }
 
+    // Once per sync: every product converts at the same rate.
+    const wantsFx = (input.options.additionalCurrencies ?? []).length > 0
+    const fxRates = wantsFx ? await fetchEcbRates() : null
+    if (wantsFx) {
+      logger.info(
+        fxRates
+          ? `Printful sync: ECB rates of ${fxRates.date} for ${input.options.additionalCurrencies!.join(", ")}`
+          : "Printful sync: ECB rates unavailable; prices of existing variants are left as they are, and new products get the store currency only"
+      )
+    }
+
     const productsToCreate: CreateProductInput[] = []
     const productsToUpdate: {
       productId: string
@@ -266,7 +278,10 @@ const mapToMedusaProductsStep = createStep(
       if (!detail) continue
 
       try {
-        const mapped = mapSyncProductToMedusa(detail, input.options)
+        const mapped = mapSyncProductToMedusa(detail, {
+          ...input.options,
+          fxRates,
+        })
 
         mapped.variants = await enrichVariantsWithDesign(
           mapped.variants,
@@ -346,7 +361,10 @@ const mapToMedusaProductsStep = createStep(
             variantsToUpdate.push({
               id: u.id,
               title: u.title,
-              prices: u.prices,
+              // A price set missing a currency would delete that currency's
+              // price, and the product would show as free in its region. When
+              // a conversion failed, keep the prices the variant already has.
+              ...(mapped.pricesComplete ? { prices: u.prices } : {}),
               metadata: u.metadata,
             })
           }

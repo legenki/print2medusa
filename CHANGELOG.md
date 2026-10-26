@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.11.0
+
+### Added
+
+- **Prices in more than one currency.** `additionalCurrencies: ["eur"]` prices
+  every variant in euros as well as the Printful store's currency, converted
+  on each sync at the ECB daily reference rate. Without it, a Medusa region in
+  euros had no price for any Printful product and storefronts showed them at
+  zero. `convertedPriceRounding` picks `"charm"` (default: up to .99, never
+  below the exact conversion), `"whole"` or `"exact"`. When the rates cannot
+  be fetched, existing variants keep their prices rather than losing a
+  currency.
+- **`metadata.printful_preview_url` on every variant** — the mockup of that
+  variant, so a storefront can switch the image when a colour is picked.
+
+### Changed
+
+- **Variants are titled by their options**: `Heather Slate / L` instead of
+  Printful's `Unisex t-shirt / Heather Slate / L`, which repeated the product
+  title next to it in carts and orders. Existing variants are retitled on the
+  next sync.
+- **New products list Color before Size**, the order a shopper picks in.
+
+### Fixed
+
+- **Variant names without size and colour fields were split wrongly.** For
+  `Unisex t-shirt / Heather Slate / L` the product name was taken as the
+  colour and the colour as the size; colour and size are now the last two
+  parts.
+
 ## 0.10.0
 
 Fixes from a full review. **Contains a breaking configuration change** — read

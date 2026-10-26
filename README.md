@@ -307,6 +307,32 @@ default exists, the sync logs a warning and imports the product anyway.
 **A product you delete in Medusa is re-imported.** Its stale links are dropped
 on the next sync and the Printful product is created afresh.
 
+### Prices in more than one currency
+
+Printful reports a retail price in the store's currency only. A Medusa region
+in any other currency then has no price for the product, and a storefront shows
+it at zero. Set `additionalCurrencies` to one entry per region currency:
+
+```ts
+options: {
+  apiToken: process.env.PRINTFUL_API_TOKEN,
+  additionalCurrencies: ["eur"],
+  // convertedPriceRounding: "charm", // $25 → €22.35 → €22.99 (default)
+}
+```
+
+Each sync converts the marked-up store price at the European Central Bank's
+daily reference rate (free, no key) and writes it beside the original. With
+the default `"charm"` rounding a converted price goes up to the next .99 and
+never below the exact conversion. If the rates cannot be fetched, existing
+variants keep the prices they have — a set missing a currency would leave the
+product free in that region — and new products get the store currency only
+until the next sync.
+
+Variants are titled by their options (`Heather Slate / L`), and each carries
+its own mockup in `metadata.printful_preview_url` for a storefront to show when
+that colour is picked.
+
 ### Stock
 
 A product whose variants Printful all reports as unavailable is set to `draft`,
@@ -541,21 +567,23 @@ the testing strategy for each release.
 
 ## Options
 
-| Option                  | Description                                                                        |
-| ----------------------- | ---------------------------------------------------------------------------------- |
-| `apiToken`              | Printful private token (required)                                                  |
-| `storeId`               | `X-PF-Store-Id` for account-level tokens                                           |
-| `autoSubmitOrders`      | Confirm orders for fulfillment (default true)                                      |
-| `createOnOrderPlaced`   | Also create Printful order on `order.placed`                                       |
-| `allowPartialOrders`    | Allow orders that mix Printful + non-Printful items                                |
-| `markupPercent`         | Markup on retail prices during sync                                                |
-| `defaultCurrency`       | Fallback currency code                                                             |
-| `webhookSecret`         | Shared secret for the Printful webhook path (see [Webhooks](#webhooks))            |
-| `syncStaleMinutes`      | Minutes before a running sync is presumed dead and reclaimed (default 60)          |
-| `onDiscontinued`        | `"flag"` (default) marks discontinued products, `"ignore"` omits the marker        |
-| `onRemovedFromPrintful` | `"unpublish"` (default) drafts products gone from Printful, `"ignore"` leaves them |
-| `salesChannelIds`       | Sales channels new products join (default: the store's default sales channel)      |
-| `shippingProfileId`     | Shipping profile new products get (default: the store's `default` profile)         |
+| Option                   | Description                                                                        |
+| ------------------------ | ---------------------------------------------------------------------------------- |
+| `apiToken`               | Printful private token (required)                                                  |
+| `storeId`                | `X-PF-Store-Id` for account-level tokens                                           |
+| `autoSubmitOrders`       | Confirm orders for fulfillment (default true)                                      |
+| `createOnOrderPlaced`    | Also create Printful order on `order.placed`                                       |
+| `allowPartialOrders`     | Allow orders that mix Printful + non-Printful items                                |
+| `markupPercent`          | Markup on retail prices during sync                                                |
+| `defaultCurrency`        | Fallback currency code                                                             |
+| `webhookSecret`          | Shared secret for the Printful webhook path (see [Webhooks](#webhooks))            |
+| `syncStaleMinutes`       | Minutes before a running sync is presumed dead and reclaimed (default 60)          |
+| `onDiscontinued`         | `"flag"` (default) marks discontinued products, `"ignore"` omits the marker        |
+| `onRemovedFromPrintful`  | `"unpublish"` (default) drafts products gone from Printful, `"ignore"` leaves them |
+| `additionalCurrencies`   | Extra currencies to price in, e.g. `["eur"]`, converted at the ECB daily rate      |
+| `convertedPriceRounding` | `"charm"` (default, up to .99), `"whole"` or `"exact"` for converted prices        |
+| `salesChannelIds`        | Sales channels new products join (default: the store's default sales channel)      |
+| `shippingProfileId`      | Shipping profile new products get (default: the store's `default` profile)         |
 
 ## License
 
