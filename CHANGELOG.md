@@ -1,6 +1,28 @@
 # Changelog
 
-## 0.11.2
+## 0.11.3
+
+The first published release with the 0.11.2 changes below. **0.11.2 was
+tagged but never reached npm**: its publish run failed in the integration
+tests, before `npm publish`. Upgrade from 0.11.0 straight to 0.11.3 and read
+0.11.2's "Upgrading" first.
+
+### Fixed
+
+- **The integration tests no longer build their schema from a hand-kept
+  migration list.** Neither list included `Migration20261023000000`, so on a
+  fresh Postgres every sync claim failed with
+  `column "warning_message" does not exist`. A long-lived local database that
+  already had the column hid it.
+  A shared helper now applies every migration in the directory, in order. The
+  shipped migration itself was always correct — no change to the plugin's own
+  code.
+
+Verified: typecheck (source and tests), 598 unit tests, 33 integration tests
+against a freshly created Postgres database, lint (0 errors, 13 warnings from
+pre-existing rules), format and the build all pass.
+
+## 0.11.2 (not published)
 
 Fixes from a security review. Most of them stop the plugin trusting
 `metadata` that a customer writes through Medusa's Store API.
