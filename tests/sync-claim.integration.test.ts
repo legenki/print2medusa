@@ -8,9 +8,6 @@ import {
 } from "@medusajs/framework/utils"
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest"
 import { PRINTFUL_MODULE } from "../src/modules/printful"
-import { Migration20260726000000 } from "../src/modules/printful/migrations/Migration20260726000000"
-import { Migration20260731000000 } from "../src/modules/printful/migrations/Migration20260731000000"
-import { Migration20260802000000 } from "../src/modules/printful/migrations/Migration20260802000000"
 import PrintfulOrderLink from "../src/modules/printful/models/printful-order-link"
 import PrintfulProductLink from "../src/modules/printful/models/printful-product-link"
 import PrintfulSyncLog from "../src/modules/printful/models/printful-sync-log"
@@ -18,6 +15,7 @@ import PrintfulVariantLink from "../src/modules/printful/models/printful-variant
 import PrintfulWebhookEvent from "../src/modules/printful/models/printful-webhook-event"
 import PrintfulModuleServiceClass from "../src/modules/printful/service"
 import type PrintfulModuleService from "../src/modules/printful/service"
+import { runAllMigrations } from "./support/migrations"
 
 /**
  * Integration tests for the atomic sync claim, run against a real Postgres.
@@ -40,33 +38,10 @@ type Pg = ReturnType<typeof createPgConnection>
 let pg: Pg
 let service: PrintfulModuleService
 
-/** Collect a migration's SQL without a MikroORM driver, then run it directly. */
-async function runMigration(
-  MigrationClass:
-    | typeof Migration20260726000000
-    | typeof Migration20260731000000
-    | typeof Migration20260802000000
-): Promise<void> {
-  const statements: string[] = []
-  const migration = Object.create(MigrationClass.prototype) as {
-    addSql: (sql: string) => void
-    up: () => Promise<void>
-  }
-  migration.addSql = (sql: string) => {
-    statements.push(sql)
-  }
-  await migration.up()
-  for (const sql of statements) {
-    await pg.raw(sql)
-  }
-}
-
 beforeAll(async () => {
   pg = createPgConnection({ clientUrl: DATABASE_URL, schema: "public" })
 
-  await runMigration(Migration20260726000000)
-  await runMigration(Migration20260731000000)
-  await runMigration(Migration20260802000000)
+  await runAllMigrations(pg)
 
   const models = toMikroOrmEntities([
     PrintfulProductLink,
