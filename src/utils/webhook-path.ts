@@ -40,3 +40,70 @@ export function redactWebhookPath(path: string): string {
  * bounded, so the public endpoint is not an unbounded memory sink.
  */
 export const WEBHOOK_BODY_SIZE_LIMIT = "1mb"
+
+/** Hosts where an `http:` webhook URL keeps the secret on this machine. */
+const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"])
+
+export type WebhookUrlResult =
+  { ok: true; url: string } | { ok: false; reason: string }
+
+/**
+ * The URL to register with Printful for a store at `baseUrl`.
+ *
+ * The secret rides in this URL, so its shape is checked rather than trusted:
+ *
+ * - `https:` only, because over `http:` the secret crosses the network in
+ *   cleartext with every delivery. Loopback hosts are exempt for local work.
+ * - No query string or fragment. Either would leave the secret somewhere other
+ *   than the last path segment, which is the only part `GET
+ *   /admin/printful/webhook` masks — the admin would be shown the live secret.
+ * - No credentials, which Printful would store and echo back.
+ *
+ * A path prefix is kept, for stores served below the domain root.
+ *
+ * The secret is encoded because it is a path segment: a base64 secret
+ * carrying "/" or "+" would otherwise split the path or change on decoding,
+ * and every delivery would 404. Express decodes `req.params.token` back to
+ * the configured value before the comparison.
+ */
+export function webhookUrlFor(
+  baseUrl: unknown,
+  secret: string
+): WebhookUrlResult {
+  if (typeof baseUrl !== "string" || !baseUrl.trim()) {
+    return { ok: false, reason: "base_url is required" }
+  }
+
+  let parsed: URL
+  try {
+    parsed = new URL(baseUrl.trim())
+  } catch {
+    return { ok: false, reason: "base_url is not a valid URL" }
+  }
+
+  const secure =
+    parsed.protocol === "https:" ||
+    (parsed.protocol === "http:" && LOOPBACK_HOSTS.has(parsed.hostname))
+  if (!secure) {
+    return {
+      ok: false,
+      reason:
+        "base_url must use https:// (http:// is accepted only for localhost)",
+    }
+  }
+  if (parsed.username || parsed.password) {
+    return { ok: false, reason: "base_url must not contain credentials" }
+  }
+  if (parsed.search || parsed.hash) {
+    return {
+      ok: false,
+      reason: "base_url must not contain a query string or fragment",
+    }
+  }
+
+  const prefix = parsed.pathname.replace(/\/+$/, "")
+  return {
+    ok: true,
+    url: `${parsed.origin}${prefix}/hooks/printful/${encodeURIComponent(secret)}`,
+  }
+}

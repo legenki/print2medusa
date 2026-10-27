@@ -28,7 +28,11 @@ import {
 import { resolveStateCode } from "../utils/mappers"
 import { planCreatedOrderMetadata } from "../utils/costs"
 import { shippingOverrideFor } from "../utils/shipping-rates"
-import { expandOrderLines } from "../utils/bundle"
+import { expandOrderLines, withVariantMetadata } from "../utils/bundle"
+import {
+  printfulOrderIdFrom,
+  withoutPrintfulKeys,
+} from "../utils/order-metadata"
 
 export type CreatePrintfulOrderInput = {
   order_id: string
@@ -131,6 +135,7 @@ const createPrintfulOrderStep = createStep(
     const printful: PrintfulModuleService = container.resolve(PRINTFUL_MODULE)
     const orderModule = container.resolve(Modules.ORDER)
     const logger = container.resolve(ContainerRegistrationKeys.LOGGER)
+    const query = container.resolve(ContainerRegistrationKeys.QUERY)
     const options = await printful.getOptions()
     const client = await printful.getClient()
 
@@ -215,18 +220,48 @@ const createPrintfulOrderStep = createStep(
     // has no Printful link of its own, be skipped as `no_printful_items` and
     // ship nothing at all.
     //
-    // Composition comes from each line's own metadata, written when the
-    // customer bought. A merchant editing the bundle afterwards must not
-    // change what an already-placed order ships.
+    // Every `printful_*` key below is read from the VARIANT, never from the
+    // line item: the Store API stores line metadata exactly as the customer
+    // sent it, so trusting it would let a buyer choose what Printful prints
+    // and bills the merchant for. See `withVariantMetadata`.
+    const variantMetadata = new Map<string, Record<string, unknown>>()
+    const loadVariantMetadata = async (
+      ids: Array<string | null | undefined>
+    ) => {
+      const missing = [
+        ...new Set(ids.filter((id): id is string => !!id)),
+      ].filter((id) => !variantMetadata.has(id))
+      if (!missing.length) {
+        return
+      }
+      const { data } = await query.graph({
+        entity: "product_variant",
+        fields: ["id", "metadata"],
+        filters: { id: missing },
+      })
+      for (const row of (Array.isArray(data) ? data : []) as Array<{
+        id: string
+        metadata?: Record<string, unknown> | null
+      }>) {
+        variantMetadata.set(row.id, row.metadata ?? {})
+      }
+    }
+
+    await loadVariantMetadata((order.items ?? []).map((i) => i.variant_id))
     const lines = expandOrderLines(
-      (order.items ?? []).map((item) => ({
-        id: item.id,
-        variant_id: item.variant_id,
-        title: item.title,
-        quantity: Number(item.quantity),
-        metadata: (item.metadata ?? {}) as Record<string, unknown>,
-      }))
+      withVariantMetadata(
+        (order.items ?? []).map((item) => ({
+          id: item.id,
+          variant_id: item.variant_id,
+          title: item.title,
+          quantity: Number(item.quantity),
+        })),
+        variantMetadata
+      )
     )
+    // Bundle members are variants in their own right and may need the
+    // metadata fallback below just like a plain line.
+    await loadVariantMetadata(lines.map((l) => l.variant_id))
 
     for (const item of lines) {
       const variantId = item.variant_id
@@ -241,7 +276,8 @@ const createPrintfulOrderStep = createStep(
       if (link) {
         syncVariantId = link.printful_sync_variant_id
       } else {
-        const meta = (item.metadata || {}) as Record<string, unknown>
+        // A variant the sync stamped but never linked (see variant-links.ts).
+        const meta = variantMetadata.get(variantId) ?? {}
         if (meta.printful_sync_variant_id) {
           syncVariantId = String(meta.printful_sync_variant_id)
         }
@@ -400,8 +436,16 @@ const createPrintfulOrderStep = createStep(
         const orderRow = await orderModule.retrieveOrder(input.order_id, {
           select: ["id", "metadata"],
         })
+        // Unless a webhook took the lock first and stamped this very Printful
+        // order, this is the plugin's first write, and every `printful_*` key
+        // already here came from the customer's cart (see order-metadata.ts).
+        // The id cannot be planted in advance: Printful assigns it above.
+        const base =
+          printfulOrderIdFrom(orderRow.metadata) === String(pfOrder.id)
+            ? (orderRow.metadata ?? {})
+            : withoutPrintfulKeys(orderRow.metadata)
         await orderModule.updateOrders(input.order_id, {
-          metadata: { ...(orderRow.metadata ?? {}), ...orderMetadata },
+          metadata: { ...base, ...orderMetadata },
         })
       })
     } catch (err) {

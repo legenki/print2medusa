@@ -21,8 +21,15 @@ const UNAVAILABLE = new Set([
   "discontinued",
 ])
 
-/** Where a bundle's composition lives, on the variant and on the order line. */
+/** Where a bundle's composition lives: the bundle variant's metadata. */
 export const BUNDLE_MEMBERS_KEY = "printful_bundle_members"
+
+/**
+ * Most units of one member a bundle may hold. Composition is merchant data,
+ * so this is a guard against a typo, not against a customer — but a typo of
+ * `1000` for `10` is an order Printful would print and bill.
+ */
+export const MAX_BUNDLE_MEMBER_QUANTITY = 100
 
 /** One product inside a bundle. */
 export type BundleMember = {
@@ -76,7 +83,11 @@ export function bundleMembersOf(
     const quantity = Number((entry as BundleMember).quantity ?? 1)
     members.push({
       variant_id: variantId,
-      quantity: Number.isFinite(quantity) && quantity > 0 ? quantity : 1,
+      // Printful takes whole units only; a fraction would be refused there.
+      quantity:
+        Number.isInteger(quantity) && quantity > 0
+          ? Math.min(quantity, MAX_BUNDLE_MEMBER_QUANTITY)
+          : 1,
     })
   }
 
@@ -98,11 +109,36 @@ export function isBundleLine(
 }
 
 /**
+ * Give each line the metadata of its variant in place of its own.
+ *
+ * A line item's own metadata is whatever the storefront sent: Medusa's Store
+ * API accepts arbitrary `metadata` on add-to-cart and stores it verbatim. A
+ * customer could therefore put a member list on the cheapest line in the shop
+ * and have Printful print — and bill the merchant for — anything at all.
+ * Composition must come from the variant, which only the merchant can edit.
+ *
+ * A line whose variant was not loaded gets empty metadata, so it can never be
+ * mistaken for a bundle on the strength of what the customer wrote.
+ */
+export function withVariantMetadata<T extends OrderLineForBundles>(
+  lines: T[],
+  metadataByVariantId: ReadonlyMap<string, Record<string, unknown>>
+): T[] {
+  return lines.map((line) => ({
+    ...line,
+    metadata: line.variant_id
+      ? (metadataByVariantId.get(line.variant_id) ?? {})
+      : {},
+  }))
+}
+
+/**
  * Replace every bundle line with the lines it stands for.
  *
- * Composition is read from the line's own metadata, captured when the customer
- * bought — never looked up live. A merchant who edits a bundle after a sale
- * must not change what an already-placed order ships.
+ * Reads composition from each line's `metadata`, which callers must first
+ * replace with the variant's via `withVariantMetadata` — see there for why the
+ * line's own metadata is never trusted. Composition is therefore the bundle's
+ * as of the moment the Printful order is created, not as of add-to-cart.
  *
  * Ordinary lines pass through untouched and keep their position, so a cart
  * mixing bundles and singles reaches Printful in the order it was built.

@@ -12,8 +12,10 @@ module.exports = defineConfig({
       storeCors: process.env.STORE_CORS!,
       adminCors: process.env.ADMIN_CORS!,
       authCors: process.env.AUTH_CORS!,
-      jwtSecret: process.env.JWT_SECRET || "supersecret",
-      cookieSecret: process.env.COOKIE_SECRET || "supersecret",
+      // No fallback: a default secret copied into production lets anyone
+      // who knows it forge admin sessions and tokens.
+      jwtSecret: process.env.JWT_SECRET!,
+      cookieSecret: process.env.COOKIE_SECRET!,
     },
   },
   plugins: [
@@ -22,6 +24,8 @@ module.exports = defineConfig({
       options: {
         apiToken: process.env.PRINTFUL_API_TOKEN,
         storeId: process.env.PRINTFUL_STORE_ID,
+        // At least 32 characters; generate with `openssl rand -hex 32`.
+        webhookSecret: process.env.PRINTFUL_WEBHOOK_SECRET,
         // autoSubmitOrders: true,
         // createOnOrderPlaced: false,
         // allowPartialOrders: false,

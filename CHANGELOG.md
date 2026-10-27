@@ -1,5 +1,59 @@
 # Changelog
 
+## Unreleased
+
+Fixes from a security review. Most of them stop the plugin trusting
+`metadata` that a customer writes through Medusa's Store API.
+
+### Upgrading
+
+- **Bundle composition is read from the bundle variant**, at the moment the
+  Printful order is created, and no longer from the order line. An edit to a
+  bundle now reaches orders that are paid but not yet sent to Printful.
+- **`createOnOrderPlaced` acts only on fully captured orders.** An order that
+  was only authorized at checkout is sent on `payment.captured`, like on any
+  other store.
+- **`POST /admin/printful/webhook` requires an `https://` `base_url`**
+  (`http://` only for `localhost`) without a query string, fragment or
+  credentials.
+
+### Security
+
+- **A customer could choose what Printful prints.** Line item metadata is
+  stored as the storefront sends it, and order creation expanded any line
+  carrying `printful_bundle_members` — a one-sticker cart could order fifty
+  hoodies, billed to the merchant. The `printful_sync_variant_id` fallback
+  read the same metadata. Both now come from the variant only. Member
+  quantities must be whole numbers and are capped at 100.
+- **A customer could have another Printful order canceled.** The shipping
+  method's `data` came from the customer's request and was passed through
+  into fulfillment data, where `cancelFulfillment` read `printful_order_id`
+  from it. Ids were also put into request paths unencoded, so
+  `../webhooks` became `DELETE /webhooks`. The provider now keeps only the
+  fields it sets itself, takes the order id from fulfillment metadata,
+  cancels only numeric ids, and the client encodes every id it puts in a path.
+  The same pass-through let a return option carry `rate_source: "live"` and
+  upgrade the outbound shipping method.
+- **The order widget showed whatever the cart said.** Medusa copies cart
+  metadata onto the order, so a customer could plant a Printful order id,
+  status, parcels and a `javascript:` tracking link. The widget now appears
+  only for orders with a Printful order link (new
+  `GET /admin/printful/orders/:id`), renders only http(s) tracking links, and
+  order creation drops planted `printful_*` keys before its first write.
+- **The webhook secret could be shown or sent in cleartext.** A `base_url`
+  with a query string moved the secret past the part the admin GET masks, and
+  an unparseable registered URL was returned unmasked.
+
+### Added
+
+- **`warning_message` on sync runs**, kept apart from `error_message` and
+  shown on the Printful page and the sync widget. Nothing writes it yet.
+
+### Changed
+
+- The example config no longer falls back to `"supersecret"` for
+  `jwtSecret` and `cookieSecret`, and shows `webhookSecret`.
+
 ## 0.11.0
 
 ### Added

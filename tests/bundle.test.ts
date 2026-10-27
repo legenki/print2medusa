@@ -4,10 +4,12 @@ import {
   bundleMembersOf,
   expandOrderLines,
   isBundleLine,
+  MAX_BUNDLE_MEMBER_QUANTITY,
   medusaLineIdFor,
   planBundleAvailability,
   planBundlePass,
   planBundlePublication,
+  withVariantMetadata,
 } from "../src/utils/bundle"
 import { STOCK_MARKER_KEY } from "../src/utils/stock"
 
@@ -350,5 +352,73 @@ describe("planBundleAvailability", () => {
       { printful_availability_status: "something_new" },
     ])
     expect(plan.available).toBe(true)
+  })
+})
+
+describe("withVariantMetadata", () => {
+  // The Store API stores line item metadata exactly as the customer sent it.
+  const planted = {
+    id: "item_cheap",
+    variant_id: "var_sticker_3in",
+    title: "Sticker",
+    quantity: 1,
+    metadata: {
+      [BUNDLE_MEMBERS_KEY]: [{ variant_id: "var_hoodie_xl", quantity: 50 }],
+      printful_sync_variant_id: "999",
+    },
+  }
+
+  it("ignores a member list the customer put on the line", () => {
+    const lines = withVariantMetadata(
+      [planted],
+      new Map([["var_sticker_3in", { printful_sync_variant_id: "111" }]])
+    )
+    const out = expandOrderLines(lines)
+
+    expect(out).toHaveLength(1)
+    expect(out[0]).toMatchObject({ variant_id: "var_sticker_3in", quantity: 1 })
+    expect(out[0].metadata).toEqual({ printful_sync_variant_id: "111" })
+  })
+
+  it("expands a bundle from its variant's members", () => {
+    const lines = withVariantMetadata(
+      [{ ...planted, variant_id: "var_bundle", metadata: {} }],
+      new Map([["var_bundle", bundleLine.metadata]])
+    )
+
+    expect(expandOrderLines(lines).map((l) => l.variant_id)).toEqual([
+      "var_tee_black_l",
+      "var_sticker_3in",
+      "var_poster_a3",
+    ])
+  })
+
+  it("gives a line with an unknown variant no metadata at all", () => {
+    const [line] = withVariantMetadata([planted], new Map())
+    expect(line.metadata).toEqual({})
+    const [orphan] = withVariantMetadata(
+      [{ ...planted, variant_id: null }],
+      new Map()
+    )
+    expect(orphan.metadata).toEqual({})
+  })
+})
+
+describe("bundle member quantity", () => {
+  const lineWith = (quantity: unknown) => ({
+    id: "l",
+    quantity: 1,
+    metadata: { [BUNDLE_MEMBERS_KEY]: [{ variant_id: "v", quantity }] },
+  })
+
+  it("caps a member at the maximum", () => {
+    expect(bundleMembersOf(lineWith(5000))[0].quantity).toBe(
+      MAX_BUNDLE_MEMBER_QUANTITY
+    )
+  })
+
+  it("treats a fractional quantity as one", () => {
+    // Printful takes whole units only.
+    expect(bundleMembersOf(lineWith(2.5))[0].quantity).toBe(1)
   })
 })

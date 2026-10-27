@@ -2,6 +2,7 @@ import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import { PRINTFUL_MODULE } from "../../../../modules/printful"
 import type PrintfulModuleService from "../../../../modules/printful/service"
 import { PRINTFUL_WEBHOOK_TYPES } from "../../../../utils/webhook-events"
+import { webhookUrlFor } from "../../../../utils/webhook-path"
 
 /**
  * Printful returns the webhook URL we registered, which embeds our secret
@@ -29,7 +30,9 @@ function maskSecretInUrl(url: string | null): string | null {
     }
     return parsed.toString()
   } catch {
-    return url
+    // Unparseable means unmaskable. Returning it as-is would put the live
+    // secret on the wire, which is the one thing this function exists to stop.
+    return null
   }
 }
 
@@ -63,19 +66,13 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     return
   }
 
-  const body = (req.body ?? {}) as { base_url?: string }
-  if (!body.base_url) {
-    res.status(400).json({ message: "base_url is required" })
+  const body = (req.body ?? {}) as { base_url?: unknown }
+  const target = webhookUrlFor(body.base_url, options.webhookSecret)
+  if (!target.ok) {
+    res.status(400).json({ message: target.reason })
     return
   }
-
-  // Encoded because the secret is a path segment. A base64 secret carrying
-  // "/" or "+" would otherwise split the path or change on decoding, and every
-  // delivery would 404. Express decodes `req.params.token` back to the
-  // configured value before the comparison.
-  const url = `${body.base_url.replace(/\/$/, "")}/hooks/printful/${encodeURIComponent(
-    options.webhookSecret
-  )}`
+  const url = target.url
 
   // Printful keeps one config per store, so this replaces the whole allowlist.
   const updated = await client.setWebhookConfig(url, [

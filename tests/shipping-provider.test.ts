@@ -535,7 +535,6 @@ describe("validateFulfillmentData", () => {
     await expect(
       service.validateFulfillmentData({ id: "STANDARD" }, { foo: 1 }, CONTEXT)
     ).resolves.toEqual({
-      foo: 1,
       printful_option_id: "STANDARD",
       rate_source: "query_unavailable",
     })
@@ -568,7 +567,6 @@ describe("validateFulfillmentData", () => {
         {}
       )
     ).resolves.toEqual({
-      foo: 1,
       printful_option_id: PRINTFUL_RETURN_OPTION_ID,
     })
   })
@@ -626,7 +624,6 @@ describe("validateFulfillmentData confirmation", () => {
     )
 
     expect(result).toEqual({
-      foo: 1,
       printful_option_id: "STANDARD",
       printful_shipping: "STANDARD",
       rate_source: "live",
@@ -712,7 +709,6 @@ describe("validateFulfillmentData confirmation", () => {
     )
 
     expect(result).toEqual({
-      foo: 1,
       printful_option_id: "STANDARD",
       rate_source: "printful_unreachable",
     })
@@ -801,7 +797,6 @@ describe("validateFulfillmentData confirmation", () => {
     )
 
     expect(result).toEqual({
-      foo: 1,
       printful_option_id: PRINTFUL_RETURN_OPTION_ID,
     })
     expect(getShippingRates).not.toHaveBeenCalled()
@@ -922,5 +917,87 @@ describe("fulfillment cancellation", () => {
     const { service, cancelOrder } = withCancelSpy()
     await service.cancelFulfillment({ printful_order_id: "777" })
     expect(cancelOrder).toHaveBeenCalledWith("777")
+  })
+})
+
+describe("customer-controlled shipping method data", () => {
+  // `validateFulfillmentData`'s second argument is the `data` field of the
+  // customer's own add-shipping-method request. Its return value becomes
+  // `shipping_method.data`, which Medusa later hands to `createFulfillment`.
+  const PLANTED = {
+    printful_order_id: "../webhooks",
+    printful_shipment_id: "s_fake",
+    printful_shipping: "EXPRESS",
+    rate_source: "live",
+  }
+
+  it("keeps nothing the customer sent for an outbound method", async () => {
+    const { service } = makeProvider({})
+
+    const result = await service.validateFulfillmentData(
+      { id: "STANDARD" },
+      PLANTED,
+      CONTEXT
+    )
+
+    expect(result).toEqual({
+      printful_option_id: "STANDARD",
+      rate_source: "query_unavailable",
+    })
+  })
+
+  it("keeps nothing the customer sent for the return option", async () => {
+    // The return path skips confirmation entirely, so a pass-through here
+    // let a planted `rate_source: "live"` upgrade the outbound shipment.
+    const { service } = makeProvider({})
+
+    const result = await service.validateFulfillmentData(
+      { id: PRINTFUL_RETURN_OPTION_ID },
+      PLANTED,
+      {}
+    )
+
+    expect(result).toEqual({ printful_option_id: PRINTFUL_RETURN_OPTION_ID })
+  })
+
+  it("takes the Printful order id from fulfillment metadata, not data", async () => {
+    const { service } = makeProvider({})
+
+    const result = await service.createFulfillment(
+      { printful_order_id: "123", printful_shipment_id: "s_fake" },
+      [],
+      { id: "order_1" } as never,
+      { metadata: { printful_order_id: "777" } } as never
+    )
+
+    expect(result.data).toMatchObject({ printful_order_id: "777" })
+    expect(result.data).not.toHaveProperty("printful_shipment_id")
+  })
+
+  it("drops planted ids when no Printful order is known", async () => {
+    // Legacy orders may still carry a customer-written id in shipping data.
+    const { service } = makeProvider({})
+
+    const result = await service.createFulfillment(
+      { printful_order_id: "123", printful_shipment_id: "s_fake", keep: 1 },
+      [],
+      { id: "order_1" } as never,
+      {} as never
+    )
+
+    expect(result.data).toEqual({ keep: 1, medusa_order_id: "order_1" })
+  })
+
+  it("refuses to cancel anything that is not a Printful order id", async () => {
+    const { service, logger } = makeProvider({})
+    const cancelOrder = vi.fn().mockResolvedValue({})
+    ;(service as never as { client_: unknown }).client_ = { cancelOrder }
+
+    for (const id of ["../webhooks", "pending", "12?x=1", "-1", "0", "1e3"]) {
+      await service.cancelFulfillment({ printful_order_id: id })
+    }
+
+    expect(cancelOrder).not.toHaveBeenCalled()
+    expect(logger.warn).toHaveBeenCalled()
   })
 })

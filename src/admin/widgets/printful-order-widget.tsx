@@ -1,8 +1,10 @@
 import { defineWidgetConfig } from "@medusajs/admin-sdk"
 import type { AdminOrder, DetailWidgetProps } from "@medusajs/framework/types"
 import { Badge, Container, Heading, Text } from "@medusajs/ui"
+import { useEffect, useState } from "react"
 import { minorUnitFactor } from "../../utils/currency"
 import { MONEY_SCALE_VERSION } from "../../utils/costs"
+import { safeTrackingUrl } from "../../utils/order-metadata"
 
 type PrintfulShipment = {
   id: string
@@ -51,17 +53,56 @@ const formatMinor = (
 }
 
 const PrintfulOrderWidget = ({ data }: DetailWidgetProps<AdminOrder>) => {
-  const metadata = (data.metadata ?? {}) as Record<string, unknown>
-  const printfulOrderId = metadata.printful_order_id as string | undefined
+  // The Printful order id comes from the plugin's link table, not from
+  // `metadata.printful_order_id`: Medusa copies the customer's cart metadata
+  // onto the order, so that key alone proves nothing. Without a link the
+  // widget stays hidden however Printful-like the metadata looks.
+  const [printfulOrderId, setPrintfulOrderId] = useState<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    fetch(`/admin/printful/orders/${encodeURIComponent(data.id)}`, {
+      credentials: "include",
+    })
+      .then((res) => {
+        if (!res.ok) {
+          throw new Error(`Status ${res.status}`)
+        }
+        return res.json() as Promise<{ printful_order_id: string | null }>
+      })
+      .then((body) => {
+        if (!cancelled) {
+          setPrintfulOrderId(body.printful_order_id)
+        }
+      })
+      .catch((e) => {
+        // Widget may load before routes are registered
+        console.error(e)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [data.id])
 
   if (!printfulOrderId) {
     return null
   }
 
+  const metadata = (data.metadata ?? {}) as Record<string, unknown>
   const status = metadata.printful_status as string | undefined
   const statusUpdatedAt = metadata.printful_status_updated_at as
     string | undefined
-  const shipments = (metadata.printful_shipments ?? []) as PrintfulShipment[]
+  // Metadata is free-form JSON; anything but a list renders as no parcels
+  // rather than throwing inside the order page. Tracking links are reduced to
+  // http(s) here, once, so no `javascript:` URL can reach an href below.
+  const shipments = (
+    Array.isArray(metadata.printful_shipments)
+      ? metadata.printful_shipments
+      : []
+  ).map((s: PrintfulShipment) => ({
+    ...s,
+    tracking_url: safeTrackingUrl(s?.tracking_url) ?? undefined,
+  })) as PrintfulShipment[]
 
   const isAttention = status ? ATTENTION_STATES.has(status) : false
 

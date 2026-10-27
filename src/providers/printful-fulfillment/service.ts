@@ -37,6 +37,7 @@ import type {
   RateSource,
   ShippingInfo,
 } from "../../utils/types"
+import { printfulOrderIdFrom } from "../../utils/order-metadata"
 
 type QueryLike = {
   graph: (input: {
@@ -191,7 +192,7 @@ class PrintfulFulfillmentProviderService extends AbstractFulfillmentProviderServ
    */
   async validateFulfillmentData(
     optionData: Record<string, unknown>,
-    data: Record<string, unknown>,
+    _data: Record<string, unknown>,
     context: Record<string, unknown>
   ): Promise<Record<string, unknown>> {
     // Runs when the method is added to the cart, not on every price refresh, so
@@ -218,7 +219,14 @@ class PrintfulFulfillmentProviderService extends AbstractFulfillmentProviderServ
           `${[...PRINTFUL_SHIPPING_METHODS, PRINTFUL_RETURN_OPTION_ID].join(", ")}.`
       )
     }
-    const validated = { ...data, printful_option_id: id }
+    // Built from scratch, never spread from `_data`. That argument is the
+    // `data` field of the customer's own add-shipping-method request, and
+    // whatever is returned here is persisted as `shipping_method.data` and
+    // later handed to `createFulfillment`. Passing it through let a customer
+    // plant `printful_order_id` (which `cancelFulfillment` then cancels) or a
+    // `printful_shipping` / `rate_source: "live"` pair that upgrades shipping
+    // at the merchant's expense. Nothing this provider reads comes from there.
+    const validated: Record<string, unknown> = { printful_option_id: id }
 
     // Printful quotes outbound shipping only, so a return has nothing to
     // confirm against — `canCalculate` already excludes it from live rates for
@@ -646,10 +654,22 @@ class PrintfulFulfillmentProviderService extends AbstractFulfillmentProviderServ
     order: Partial<FulfillmentOrderDTO> | undefined,
     fulfillment: Partial<Omit<FulfillmentDTO, "provider_id" | "data" | "items">>
   ): Promise<CreateFulfillmentResult> {
-    // Prefer order created by payment.captured subscriber; attach id if present.
-    const existingId =
-      (data?.printful_order_id as string | undefined) ||
-      (fulfillment?.metadata?.printful_order_id as string | undefined)
+    // Only the fulfillment's metadata, which apply-order-status writes from
+    // the order link. `data` is the order's `shipping_method.data` and must
+    // not be able to name the Printful order: `cancelFulfillment` acts on
+    // whatever id ends up stored here.
+    const existingId = printfulOrderIdFrom(fulfillment?.metadata)
+
+    // Orders placed on an earlier release may still carry customer-written
+    // ids in their shipping method data. Both are dropped so neither reaches
+    // the stored fulfillment data `cancelFulfillment` decides on: a planted
+    // order id names what to cancel, a planted shipment id stops a real
+    // cancellation from reaching Printful.
+    const {
+      printful_order_id: _untrustedOrderId,
+      printful_shipment_id: _untrustedShipmentId,
+      ...rest
+    } = data && typeof data === "object" ? data : {}
 
     // The webhook path creates one fulfillment per Printful parcel. Carrying
     // the parcel id into `data` is what lets cancelFulfillment tell such a
@@ -660,7 +680,7 @@ class PrintfulFulfillmentProviderService extends AbstractFulfillmentProviderServ
     if (existingId) {
       return {
         data: {
-          ...(typeof data === "object" ? data : {}),
+          ...rest,
           printful_order_id: existingId,
           ...(shipmentId ? { printful_shipment_id: shipmentId } : {}),
         },
@@ -677,7 +697,7 @@ class PrintfulFulfillmentProviderService extends AbstractFulfillmentProviderServ
 
     return {
       data: {
-        ...(typeof data === "object" ? data : {}),
+        ...rest,
         medusa_order_id: order?.id,
       },
       labels: [],
@@ -685,8 +705,18 @@ class PrintfulFulfillmentProviderService extends AbstractFulfillmentProviderServ
   }
 
   async cancelFulfillment(data: Record<string, unknown>): Promise<unknown> {
-    const printfulOrderId = data?.printful_order_id as string | undefined
+    // A Printful order id is numeric. Anything else did not come from
+    // Printful, and as a path segment `../webhooks` would turn this DELETE
+    // into one that switches off the store's webhook configuration.
+    const printfulOrderId = printfulOrderIdFrom(data)
     if (!printfulOrderId) {
+      if (data?.printful_order_id != null) {
+        this.logger_.warn(
+          `Refusing to cancel Printful order with non-numeric id ${JSON.stringify(
+            String(data.printful_order_id)
+          ).slice(0, 100)}`
+        )
+      }
       return {}
     }
 

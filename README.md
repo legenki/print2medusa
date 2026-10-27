@@ -142,6 +142,14 @@ curl -X POST https://your-store.com/admin/printful/webhook \
   -d '{"base_url":"https://your-store.com"}'
 ```
 
+Generate the secret with `openssl rand -hex 32`. The module refuses to start
+with one shorter than 32 characters, but length is all it can check.
+
+`base_url` must be an `https://` origin, optionally with a path prefix, and
+without a query string, fragment or credentials. `http://` is accepted only for
+`localhost`, because the secret would otherwise cross the network in
+cleartext.
+
 The payload is treated as a **trigger, not a source of truth**: the endpoint
 stores the event, answers `200`, and the workflow re-reads
 `GET /orders/{id}` from Printful for the authoritative state.
@@ -482,8 +490,12 @@ order is placed the bundle line is **replaced by its members**, with each
 member's quantity multiplied by how many bundles were bought. Two bundles each
 holding two stickers order four stickers.
 
-Composition is read from the order line, captured at purchase. Editing a bundle
-after a sale does not change what an already-placed order ships.
+Composition is read from the **bundle variant** when the Printful order is
+created, never from the order line. Line item metadata is whatever the
+storefront sent, so a member list there would let a customer choose what
+Printful prints. An edit to a bundle therefore reaches orders that are paid
+but not yet sent to Printful. Member quantities must be whole numbers and are
+capped at 100.
 
 **A bundle is stricter about stock than a plain product.** A product is drafted
 only when every variant is gone, since any remaining variant is still sellable.
@@ -572,7 +584,7 @@ the testing strategy for each release.
 | `apiToken`               | Printful private token (required)                                                  |
 | `storeId`                | `X-PF-Store-Id` for account-level tokens                                           |
 | `autoSubmitOrders`       | Confirm orders for fulfillment (default true)                                      |
-| `createOnOrderPlaced`    | Also create Printful order on `order.placed`                                       |
+| `createOnOrderPlaced`    | Also create Printful order on `order.placed`, once the order is fully captured     |
 | `allowPartialOrders`     | Allow orders that mix Printful + non-Printful items                                |
 | `markupPercent`          | Markup on retail prices during sync                                                |
 | `defaultCurrency`        | Fallback currency code                                                             |

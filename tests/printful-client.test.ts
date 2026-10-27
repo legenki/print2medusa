@@ -690,3 +690,51 @@ describe("retry delay ceiling", () => {
     }
   })
 })
+
+describe("ids in request paths", () => {
+  function client() {
+    const fetchImpl = vi
+      .fn()
+      .mockImplementation(async () => jsonResponse({ code: 200, result: {} }))
+    return {
+      fetchImpl,
+      client: new PrintfulClient({
+        apiToken: "token",
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+        maxRetries: 0,
+      }),
+    }
+  }
+
+  it("cannot be steered to another endpoint by a stored id", async () => {
+    // Unencoded, the URL parser resolves `/orders/../webhooks` to `/webhooks`,
+    // and cancelOrder becomes DELETE of the store's webhook configuration.
+    const { client: c, fetchImpl } = client()
+
+    await c.cancelOrder("../webhooks")
+    await c.getOrder("1?x=1")
+    await c.getSyncProduct("../orders")
+    await c.getCatalogVariant("../webhooks")
+
+    const paths = fetchImpl.mock.calls.map(
+      ([url]) => new URL(String(url)).pathname
+    )
+    expect(paths).toEqual([
+      "/orders/..%2Fwebhooks",
+      "/orders/1%3Fx%3D1",
+      "/store/products/..%2Forders",
+      "/products/variant/..%2Fwebhooks",
+    ])
+    expect(fetchImpl.mock.calls[0][1].method).toBe("DELETE")
+  })
+
+  it("leaves a numeric id as it was", async () => {
+    const { client: c, fetchImpl } = client()
+
+    await c.getOrder(12345)
+
+    expect(new URL(String(fetchImpl.mock.calls[0][0])).pathname).toBe(
+      "/orders/12345"
+    )
+  })
+})

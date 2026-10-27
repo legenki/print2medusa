@@ -46,6 +46,17 @@ export type PrintfulClientOptions = {
 
 const DEFAULT_BASE_URL = "https://api.printful.com"
 
+/**
+ * An id as a single, encoded path segment.
+ *
+ * Ids reach these paths from stored data, and a value like `../webhooks`
+ * would otherwise be resolved by the URL parser into a different endpoint —
+ * on `cancelOrder`, a DELETE of the store's webhook configuration.
+ */
+function pathSegment(id: number | string): string {
+  return encodeURIComponent(String(id))
+}
+
 export class PrintfulClient {
   private readonly apiToken: string
   private readonly storeId?: string
@@ -136,7 +147,7 @@ export class PrintfulClient {
     id: number | string
   ): Promise<PrintfulSyncProductDetail> {
     const data = await this.request<PrintfulSyncProductDetail>(
-      `/store/products/${id}`
+      `/store/products/${pathSegment(id)}`
     )
     return data.result
   }
@@ -159,7 +170,7 @@ export class PrintfulClient {
   }
 
   async getOrder(id: number | string): Promise<PrintfulOrder> {
-    const data = await this.request<PrintfulOrder>(`/orders/${id}`)
+    const data = await this.request<PrintfulOrder>(`/orders/${pathSegment(id)}`)
     return data.result
   }
 
@@ -188,9 +199,12 @@ export class PrintfulClient {
   }
 
   async cancelOrder(id: number | string): Promise<PrintfulOrder> {
-    const data = await this.request<PrintfulOrder>(`/orders/${id}`, {
-      method: "DELETE",
-    })
+    const data = await this.request<PrintfulOrder>(
+      `/orders/${pathSegment(id)}`,
+      {
+        method: "DELETE",
+      }
+    )
     return data.result
   }
 
@@ -240,7 +254,7 @@ export class PrintfulClient {
   ): Promise<PrintfulCatalogVariant | null> {
     try {
       const data = await this.request<PrintfulCatalogVariant>(
-        `/products/variant/${catalogVariantId}`
+        `/products/variant/${pathSegment(catalogVariantId)}`
       )
       return data.result ?? null
     } catch {
