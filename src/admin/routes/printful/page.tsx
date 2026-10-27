@@ -26,6 +26,7 @@ type SyncRow = {
   products_processed?: number
   products_total?: number
   error_message?: string | null
+  warning_message?: string | null
 }
 
 type Health = {
@@ -311,6 +312,17 @@ const PrintfulPage = () => {
           Refresh
         </Button>
       </div>
+
+      {latest?.warning_message && (
+        <div className="px-6 py-4 flex flex-col gap-1">
+          <Text size="small" weight="plus" className="text-ui-tag-orange-text">
+            Last sync finished with a warning
+          </Text>
+          <Text size="small" className="text-ui-fg-subtle">
+            {latest.warning_message}
+          </Text>
+        </div>
+      )}
 
       {stuck && (
         <div className="px-6 py-4 flex flex-col gap-2">

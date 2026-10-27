@@ -16,6 +16,7 @@ type SyncStatus = {
     products_processed?: number
     products_total?: number
     error_message?: string | null
+    warning_message?: string | null
   } | null
 }
 
@@ -211,6 +212,11 @@ const PrintfulSyncWidget = () => {
             {latest.error_message ? (
               <Text size="small" className="text-ui-fg-error">
                 {latest.error_message.slice(0, 300)}
+              </Text>
+            ) : null}
+            {latest.warning_message ? (
+              <Text size="small" className="text-ui-tag-orange-text">
+                {latest.warning_message}
               </Text>
             ) : null}
           </>

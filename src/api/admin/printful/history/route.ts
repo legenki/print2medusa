@@ -56,6 +56,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
       products_processed: log.products_processed,
       products_total: log.products_total,
       error_message: log.error_message,
+      warning_message: log.warning_message,
     })),
     limit,
     offset,
