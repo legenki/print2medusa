@@ -1,9 +1,13 @@
 # Changelog
 
-## Unreleased
+## 0.11.2
 
 Fixes from a security review. Most of them stop the plugin trusting
 `metadata` that a customer writes through Medusa's Store API.
+
+Verified: typecheck (source and tests), 598 unit tests, 33 integration tests
+against Postgres, lint (0 errors, 13 warnings from pre-existing rules), format
+and the build all pass.
 
 ### Upgrading
 
