@@ -14,8 +14,10 @@ jobs:
 
     permissions:
       contents: read
-      # Lets npm record where the package was built from, so a consumer can
-      # verify the tarball came from this repository and this workflow.
+      # The publish credential. npm trusted publishing exchanges this job's
+      # OIDC token for a short-lived one scoped to this package, so no npm
+      # token is stored in the repository. The same token signs provenance,
+      # which lets a consumer verify the tarball came from this workflow.
       id-token: write
 
     services:
@@ -40,6 +42,12 @@ jobs:
           node-version: "22"
           cache: npm
           registry-url: https://registry.npmjs.org
+
+      # Trusted publishing needs npm 11.5.1 or later, and Node 22 ships npm
+      # 10. Installs the version `packageManager` pins, so CI and local
+      # installs resolve the lockfile with the same npm.
+      - name: Install the pinned npm
+        run: npm install -g "$(node -p "require('./package.json').packageManager")"
 
       - run: npm ci
 
@@ -78,7 +86,11 @@ jobs:
 
       # `prepublishOnly` rebuilds, so the tarball is built from this checkout
       # rather than from whatever happened to be on the publisher's machine.
+      #
+      # No NODE_AUTH_TOKEN: npm authenticates through the trusted publisher
+      # configured for this package on npmjs.com (repository
+      # legenki/print2medusa, workflow publish.yml). Without that
+      # configuration this step fails, by design, rather than fall back to
+      # a long-lived token.
       - name: Publish to npm
         run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

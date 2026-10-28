@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+No change to the plugin's own code.
+
+### Changed
+
+- **Releases publish through npm trusted publishing.** The Publish workflow
+  authenticates with its GitHub OIDC token instead of an `NPM_TOKEN` secret,
+  and installs the npm that `packageManager` pins (11.17.0), since trusted
+  publishing needs npm 11.5.1 or later. The package needs a trusted publisher
+  configured on npmjs.com before the next release; see "Releasing" in the
+  README.
+- **vitest 3.2.7 → 4.1.12 and vite 5.4.21 → 7.3.7** (dev only). This clears
+  every advisory `npm audit` reported against vitest, `@vitest/mocker`,
+  `tinypool`, vite and esbuild, among them two critical ones. vite 7.3.7
+  also replaces the 7.3.6 that Medusa's admin bundler pulled in. Not vitest 5
+  or vite 8: vitest 5 drops Node 20, which Medusa still supports, and
+  Medusa's admin vite plugin accepts vite 7 at most.
+
 ## 0.11.3
 
 The first published release with the 0.11.2 changes below. **0.11.2 was

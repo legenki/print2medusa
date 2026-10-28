@@ -553,8 +553,13 @@ The workflow refuses to publish if the tag and `package.json` disagree, or if
 that version is already on npm. It publishes with `--provenance`, so npm
 records which repository and workflow built the package.
 
-Needs an `NPM_TOKEN` repository secret — a **granular** automation token
-scoped to this package, not a classic token with account-wide write.
+It authenticates with **npm trusted publishing**, so no npm token is stored
+in the repository. On npmjs.com the package needs a trusted publisher:
+**Settings → Trusted Publisher → GitHub Actions**, organization or user
+`legenki`, repository `print2medusa`, workflow `publish.yml`, no environment.
+Once a release has gone out that way, set **Publishing access** to "Require
+two-factor authentication and disallow tokens" and delete any `NPM_TOKEN`
+secret, so a leaked token cannot publish.
 
 In a host Medusa app:
 
