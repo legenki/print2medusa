@@ -1,23 +1,42 @@
 # Changelog
 
-## Unreleased
+## 0.11.4
 
-No change to the plugin's own code.
+No change to the plugin's own code. The first release published through npm
+trusted publishing, and one worth reading for its README fix if you use live
+shipping rates.
+
+### Fixed
+
+- **The README's live shipping rates setup did not turn them on.** It put
+  `liveShippingRates` and `fallbackShippingRates` on the plugin, but the
+  fulfillment provider only ever reads the options of its own entry under the
+  fulfillment module, so it reported that it could not calculate prices and
+  every Printful shipping option stayed flat. If you followed it, move those
+  options — and `shippingRateCacheTtlSeconds` / `shippingRateStaleSeconds` if
+  set — into the provider's `options`. The README, the example config and the
+  options table now show where each option belongs.
+- **README and ROADMAP brought up to date**: the `webhooks` token scope, Node
+  20.19+ or 22.12+, how deferred webhook events are retried, and entries for
+  0.10.0 through 0.11.3.
 
 ### Changed
 
 - **Releases publish through npm trusted publishing.** The Publish workflow
   authenticates with its GitHub OIDC token instead of an `NPM_TOKEN` secret,
   and installs the npm that `packageManager` pins (11.17.0), since trusted
-  publishing needs npm 11.5.1 or later. The package needs a trusted publisher
-  configured on npmjs.com before the next release; see "Releasing" in the
-  README.
+  publishing needs npm 11.5.1 or later. See "Releasing" in the README for
+  the trusted publisher this needs on npmjs.com.
 - **vitest 3.2.7 → 4.1.12 and vite 5.4.21 → 7.3.7** (dev only). This clears
   every advisory `npm audit` reported against vitest, `@vitest/mocker`,
   `tinypool`, vite and esbuild, among them two critical ones. vite 7.3.7
   also replaces the 7.3.6 that Medusa's admin bundler pulled in. Not vitest 5
   or vite 8: vitest 5 drops Node 20, which Medusa still supports, and
   Medusa's admin vite plugin accepts vite 7 at most.
+
+Verified: typecheck (source and tests), 598 unit tests, 33 integration tests
+against a freshly created Postgres database, lint (0 errors, 13 warnings from
+pre-existing rules), format and the build all pass.
 
 ## 0.11.3
 
