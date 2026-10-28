@@ -10,9 +10,12 @@ Published on npm as [`@legenki/print2medusa`](https://www.npmjs.com/package/@leg
 
 ## Requirements
 
-- Node.js ≥ 20
-- Medusa **≥ 2.18.0** (peer dependency `^2.18.0`)
-- Printful store on the **Manual order / API** platform with a private token (`orders`, `sync_products` scopes)
+- Node.js **20.19+ or 22.12+**, the same as Medusa itself. Node 20 is past end
+  of life; CI runs on 22.
+- Medusa **≥ 2.18.0** (peer dependency `^2.18.0`, tested against 2.21.1)
+- Printful store on the **Manual order / API** platform with a private token
+  carrying the `orders`, `sync_products` and `webhooks` scopes. `webhooks` is
+  needed only to register the webhook from the admin.
 
 ## Install
 
@@ -40,11 +43,7 @@ plugins: [
       // allowPartialOrders: false,
       // markupPercent: 30,
       // defaultCurrency: "USD",
-
-      // Live shipping rates. `fallbackShippingRates` is required when this is
-      // on — it is what a cart prices at if Printful is unreachable.
-      liveShippingRates: true,
-      fallbackShippingRates: { STANDARD: 7, PRINTFUL_RETURN: 7 },
+      // webhookSecret: process.env.PRINTFUL_WEBHOOK_SECRET, // see Webhooks
     },
   },
 ],
@@ -64,9 +63,16 @@ modules: [
         {
           resolve: "@legenki/print2medusa/providers/printful-fulfillment",
           id: "printful",
+          // The provider gets only these options, never the plugin's above,
+          // so the token is repeated and live rates are configured here.
           options: {
             apiToken: process.env.PRINTFUL_API_TOKEN,
             storeId: process.env.PRINTFUL_STORE_ID,
+            // Live shipping rates. `fallbackShippingRates` is required when
+            // this is on — it is what a cart prices at if Printful is
+            // unreachable.
+            liveShippingRates: true,
+            fallbackShippingRates: { STANDARD: 7 },
           },
         },
       ],
@@ -83,11 +89,12 @@ npx medusa db:migrate
 
 See `examples/basic-store/` for a fuller snippet.
 
-## What it does (MVP)
+## What it does
 
 | Feature              | How                                                                                       |
 | -------------------- | ----------------------------------------------------------------------------------------- |
 | Product sync         | Admin **Sync Now** or `POST /admin/printful/sync` → runs in the background, one at a time |
+| Multi-currency       | Prices in extra currencies at the ECB daily rate (`additionalCurrencies`)                 |
 | Stock awareness      | Variants Printful reports as unavailable unpublish the product; restock republishes it    |
 | Removal handling     | A full sync drafts products that vanished from Printful; a re-add republishes them        |
 | Shipping fidelity    | The method the customer paid for is confirmed with Printful and sent on the order         |
@@ -134,16 +141,15 @@ options: {
 
 Generate it as hex — `openssl rand -hex 32` — so it is URL-safe as it stands.
 Other alphabets work too (the registered URL is percent-encoded), but a hex
-secret is one you can paste into a URL by hand without surprises.
+secret is one you can paste into a URL by hand without surprises. The module
+refuses to start with a secret shorter than 32 characters, but length is all
+it can check.
 
 ```bash
 curl -X POST https://your-store.com/admin/printful/webhook \
   -H 'content-type: application/json' \
   -d '{"base_url":"https://your-store.com"}'
 ```
-
-Generate the secret with `openssl rand -hex 32`. The module refuses to start
-with one shorter than 32 characters, but length is all it can check.
 
 `base_url` must be an `https://` origin, optionally with a path prefix, and
 without a query string, fragment or credentials. `http://` is accepted only for
@@ -153,6 +159,13 @@ cleartext.
 The payload is treated as a **trigger, not a source of truth**: the endpoint
 stores the event, answers `200`, and the workflow re-reads
 `GET /orders/{id}` from Printful for the authoritative state.
+
+**An event that cannot be applied yet is kept, not dropped.** A webhook can
+arrive before `payment.captured` has linked its order, and an apply can fail
+on a Printful or database error. Such an event is stored as `deferred` and the
+`printful-retry-webhook-events` job retries it every 5 minutes, backing off
+from 5 minutes doubling to 6 hours. After 20 attempts it is marked `failed`
+and shows up in the admin page's webhook health.
 
 ### The secret is in the URL path
 
@@ -215,16 +228,6 @@ Printful quotes shipping for the destination and cart contents instead of you
 setting a flat price by hand.
 
 ```ts
-plugins: [
-  {
-    resolve: "@legenki/print2medusa",
-    options: {
-      apiToken: process.env.PRINTFUL_API_TOKEN,
-      liveShippingRates: true,
-      fallbackShippingRates: { STANDARD: 5 }, // Medusa amount, main units ($5.00)
-    },
-  },
-],
 modules: [
   {
     resolve: "@medusajs/medusa/fulfillment",
@@ -236,13 +239,24 @@ modules: [
         {
           resolve: "@legenki/print2medusa/providers/printful-fulfillment",
           id: "printful",
-          options: { apiToken: process.env.PRINTFUL_API_TOKEN },
+          options: {
+            apiToken: process.env.PRINTFUL_API_TOKEN,
+            liveShippingRates: true,
+            fallbackShippingRates: { STANDARD: 5 }, // Medusa amount, main units ($5.00)
+            // shippingRateCacheTtlSeconds: 600,
+            // shippingRateStaleSeconds: 86400,
+          },
         },
       ],
     },
   },
 ],
 ```
+
+**These options belong to the provider, not the plugin.** Medusa hands a
+fulfillment provider only the `options` of its own entry, so
+`liveShippingRates` set on the plugin is never seen: the provider reports that
+it cannot calculate prices, and every Printful shipping option stays flat.
 
 **`dependencies: ["query"]` is not optional.** Without it the provider cannot
 resolve Printful variant ids, and every quote quietly falls back to the flat
@@ -288,7 +302,8 @@ in the background, so a large catalog no longer holds the request open. The
 widget polls progress while it runs.
 
 **One sync at a time.** A second request gets `409` with the running sync's
-`started_at`, and the nightly job skips quietly rather than piling on. This is
+`started_at`, and the nightly job (`printful-sync-products`, daily at 03:00
+server time) skips quietly rather than piling on. This is
 enforced by a partial unique index in Postgres, not by a check-then-insert, so
 double-clicking **Sync Now** cannot start two.
 
@@ -543,11 +558,14 @@ Publishing runs from CI on a version tag, so the tarball is always built from
 a checkout that passed the full suite rather than from a maintainer's laptop:
 
 ```bash
-npm version 0.8.2 --no-git-tag-version   # edit CHANGELOG first
-git commit -am "docs: release 0.8.2"
-git tag -a v0.8.2 -m "0.8.2"
+npm version 1.2.3 --no-git-tag-version   # edit CHANGELOG first
+git commit -am "release: 1.2.3"
+git tag -a v1.2.3 -m "1.2.3"
 git push origin main --follow-tags
 ```
+
+A tag whose run fails publishes nothing. Fix forward with the next patch
+version rather than moving the tag, as 0.11.3 did for 0.11.2.
 
 The workflow refuses to publish if the tag and `package.json` disagree, or if
 that version is already on npm. It publishes with `--provenance`, so npm
@@ -569,25 +587,31 @@ npx medusa plugin:add @legenki/print2medusa
 
 ## Roadmap
 
-See [ROADMAP.md](https://github.com/legenki/print2medusa/blob/main/ROADMAP.md) for the planned path from `0.2.0` (webhooks and
-order status) through `1.0.0` (stable API and Printful v2 migration), including
-the testing strategy for each release.
+See [ROADMAP.md](https://github.com/legenki/print2medusa/blob/main/ROADMAP.md)
+for what each release shipped, what is still unwired, and the path to `1.0.0`
+(stable API and Printful v2 migration).
 
 ## Architecture notes
 
 - **Printful is source of truth** for products; Medusa holds a copy + links.
 - Printful API **v1** (`https://api.printful.com`).
-- Long-running sync runs as a Medusa **workflow** (not a blocking HTTP body only—route awaits the workflow today; can be queued later).
+- Catalog sync runs as a Medusa **workflow** in the background: the route
+  claims the run, answers `202` and returns. See [Catalog sync](#catalog-sync).
 - Webhooks carry their secret in the URL path because Printful v1 supports no
   custom headers — see [Webhooks](#webhooks).
 - Multi-store polish and Printful API v2: see [ROADMAP.md](https://github.com/legenki/print2medusa/blob/main/ROADMAP.md).
 
 ## Options
 
+Plugin options go in the `plugins` entry. The fulfillment provider is
+configured separately, in its own entry under the fulfillment module, and sees
+only the options given there.
+
 | Option                   | Description                                                                        |
 | ------------------------ | ---------------------------------------------------------------------------------- |
 | `apiToken`               | Printful private token (required)                                                  |
 | `storeId`                | `X-PF-Store-Id` for account-level tokens                                           |
+| `timeoutMs`              | Per-request deadline for Printful calls in ms (default 15000)                      |
 | `autoSubmitOrders`       | Confirm orders for fulfillment (default true)                                      |
 | `createOnOrderPlaced`    | Also create Printful order on `order.placed`, once the order is fully captured     |
 | `allowPartialOrders`     | Allow orders that mix Printful + non-Printful items                                |
@@ -601,6 +625,18 @@ the testing strategy for each release.
 | `convertedPriceRounding` | `"charm"` (default, up to .99), `"whole"` or `"exact"` for converted prices        |
 | `salesChannelIds`        | Sales channels new products join (default: the store's default sales channel)      |
 | `shippingProfileId`      | Shipping profile new products get (default: the store's `default` profile)         |
+
+Fulfillment provider options:
+
+| Option                        | Description                                                                       |
+| ----------------------------- | --------------------------------------------------------------------------------- |
+| `apiToken`                    | Printful private token (required, same as the plugin's)                           |
+| `storeId`                     | `X-PF-Store-Id` for account-level tokens                                          |
+| `timeoutMs`                   | Per-request deadline for Printful calls in ms (default 15000)                     |
+| `liveShippingRates`           | Quote shipping from Printful at checkout (see [Live rates](#live-shipping-rates)) |
+| `fallbackShippingRates`       | Flat rate per method, in main units, when no live quote is available              |
+| `shippingRateCacheTtlSeconds` | How long a quote counts as fresh (default 600)                                    |
+| `shippingRateStaleSeconds`    | How long a quote is kept as a fallback (default 86400)                            |
 
 ## License
 

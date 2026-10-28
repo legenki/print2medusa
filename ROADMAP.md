@@ -5,25 +5,28 @@ From catalog sync to a complete Printful backend.
 Each release closes one coherent Printful capability and leaves the plugin in a
 working state. The testing strategy tightens as the API surface grows.
 
-Eighteen releases so far, `0.1.0` through `0.9.8`. Six of them — `0.5.1`,
-`0.5.2`, `0.5.3`, `0.9.3`, `0.9.4` and `0.9.5` — exist because a defect was
-found in shipped code; what they fixed is recorded in `CHANGELOG.md` rather
-than quietly amended.
+Twenty-three releases on npm so far, `0.1.0` through `0.11.3`. Six of them —
+`0.5.1`, `0.5.2`, `0.5.3`, `0.9.3`, `0.9.4` and `0.9.5` — exist because a
+defect was found in shipped code, and `0.10.0` is a release of fixes from a
+full review; what they fixed is recorded in `CHANGELOG.md` rather than quietly
+amended. `0.11.2` was tagged but never published — its publish run failed —
+so `0.11.3` is the first release carrying its changes.
 
 ## Where we are
 
 |                   |                                                                      |
 | ----------------- | -------------------------------------------------------------------- |
-| Published version | `0.9.8`                                                              |
+| Published version | `0.11.3`                                                             |
 | Tests             | unit (`npm test`) + integration (`test:integration`, needs Postgres) |
 | Printful API used | store products, catalog, orders, shipping rates, webhooks, reports   |
 | Peer range        | `@medusajs/*` `^2.18.0` (tested against 2.21.1)                      |
 
-The plugin covers products, orders, order cancellation, webhook configuration,
-order status, live shipping rates, stock-driven publication, removal from
-Printful on full sync, order costs, shipping-method confirmation, a Printful
-admin page with sales figures, sync history and webhook health, and design
-parameters with paste-ready mockup prompts.
+The plugin covers products, prices in additional currencies, orders, order
+cancellation and recovery, webhook configuration, order status, live shipping
+rates, stock-driven publication, removal from Printful on full sync, order
+costs, shipping-method confirmation, merch bundles, a Printful admin page with
+sales figures, sync history and webhook health, and design parameters with
+paste-ready mockup prompts.
 
 Still unwired: **taxes** (Printful's `/tax/rates` exists but its request and
 response schemas are undocumented, so implementing a Medusa tax provider against
@@ -256,6 +259,8 @@ whatever was on disk rather than from a checkout known to pass.
 - The workflow refuses a tag that disagrees with `package.json`, and refuses a
   version already on npm
 - `--provenance`, so npm records the repository, commit and workflow
+- On `main` after `0.11.3`: the workflow authenticates through npm trusted
+  publishing instead of an `NPM_TOKEN` secret
 
 ---
 
@@ -284,7 +289,7 @@ intervene.
 
 ---
 
-## 0.9.x — Design parameters, prompts, bundles `next`
+## 0.9.x — Design parameters, prompts, bundles `shipped`
 
 The plugin knows how to sell a Printful product. It knows nothing about the
 **design** on it — and that is the work of a store shipping new artwork every
@@ -332,6 +337,50 @@ publishes no schema for them.
 
 ---
 
+## 0.10.0 — Fixes from a full review `shipped`
+
+A review of the whole plugin found defects in money, order recovery and
+fulfillment that had shipped. **Breaking:** `fallbackShippingRates` moved to
+main units.
+
+- **Money units.** Every amount crossing into Medusa was a hundred times too
+  large; product prices are rewritten on the next sync
+- **Storefront placement.** Imported products join a sales channel and a
+  shipping profile, without which the Store API never listed them
+- **Order recovery.** `POST /orders` is never retried inside the client; an
+  unknown outcome is settled by `external_id`, and the `printful-retry-orders`
+  job revisits unresolved claims every 15 minutes
+- **Parcels.** One parcel's fulfillment no longer cancels the whole Printful
+  order, a bundle is fulfilled only when every member has shipped, and a
+  fulfillment left unshipped is completed on the next webhook or retry
+
+---
+
+## 0.11.0 — Prices in more than one currency `shipped`
+
+- `additionalCurrencies` prices every variant in further currencies at the ECB
+  daily reference rate, with `convertedPriceRounding` (`"charm"`, `"whole"` or
+  `"exact"`). Without it a region in another currency had no price at all
+- Variants are titled by their options, and carry their own mockup in
+  `metadata.printful_preview_url`
+
+---
+
+## 0.11.3 — Security review `shipped`
+
+Ships the changes tagged as `0.11.2`, which never reached npm.
+
+- **Customer-written metadata is no longer trusted.** Bundle composition comes
+  from the variant, not the cart line; the shipping provider keeps only the
+  fields it sets and cancels only numeric Printful order ids; the admin order
+  widget needs a Printful order link and renders only http(s) tracking links
+- **Webhook registration** requires an `https://` `base_url`
+- **`createOnOrderPlaced`** acts only on fully captured orders
+- **Testing:** the integration suites apply every shipped migration from the
+  directory instead of a hand-kept list, which had hidden a missing column
+
+---
+
 ## 1.0.0 — Stable API and v2 migration `next`
 
 Freeze the plugin's public contract and migrate to Printful API v2, already in
@@ -348,7 +397,6 @@ delivery dates.
 - Mockup Generator and File Library — **both exist in API v1**, so neither depends
   on the v2 migration; they sit here only because they suit a major release
 - Public contract: exported types, documented option semantics, deprecation policy
-- Automated npm publishing on git tag via a granular access token
 
 ### Testing — adds E2E and compatibility
 

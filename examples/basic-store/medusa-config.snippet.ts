@@ -33,8 +33,8 @@ module.exports = defineConfig({
         // defaultCurrency: "USD",
         // onDiscontinued: "flag",
         // onRemovedFromPrintful: "unpublish", // or "ignore"
-        // liveShippingRates: true,
-        // fallbackShippingRates: { STANDARD: 5 },
+        // Live shipping rates are configured on the provider below, which
+        // never sees these plugin options.
       },
     },
   ],
