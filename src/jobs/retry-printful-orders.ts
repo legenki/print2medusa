@@ -9,13 +9,24 @@ import createPrintfulOrderWorkflow from "../workflows/create-printful-order"
 const BATCH_SIZE = 25
 
 /**
+ * Unresolved claims read per sweep. More than the batch, because claims still
+ * waiting out a backoff are read and then skipped: reading only BATCH_SIZE, a
+ * store with that many orders failing in a row would never reach the ones due
+ * behind them.
+ */
+const SCAN_SIZE = 200
+
+/**
  * Settles order claims whose create never reached a known outcome.
  *
  * Order creation is triggered once, by `payment.captured` (or `order.placed`).
  * When that one attempt times out and the follow-up lookup fails too, the
  * claim is deliberately held — a stalled order is better than a duplicate —
  * but nothing ever came back for it. Same for a process that died between
- * writing the claim and calling Printful. This sweep is that second look.
+ * writing the claim and calling Printful, and for an attempt that failed
+ * outright, which leaves a claim marked `failed` (recordFailedOrderAttempt).
+ * This sweep is that second look, with a backoff per order so one that keeps
+ * failing is retried a few times an hour at most (claimRetryDelayMs).
  *
  * It re-runs the ordinary create workflow, which already knows how to
  * recover: it looks the order up by `external_id`, adopts it if Printful has
@@ -27,8 +38,10 @@ export default async function retryPrintfulOrders(container: MedusaContainer) {
   const logger: { info: (m: string) => void; error: (m: string) => void } =
     container.resolve(ContainerRegistrationKeys.LOGGER)
 
-  const pending = await printful.listUnresolvedOrderLinks(BATCH_SIZE)
-  const due = pending.filter((link) => classifyPendingClaim(link) === "settle")
+  const pending = await printful.listUnresolvedOrderLinks(SCAN_SIZE)
+  const due = pending
+    .filter((link) => classifyPendingClaim(link) === "settle")
+    .slice(0, BATCH_SIZE)
   if (!due.length) {
     return
   }

@@ -17,9 +17,9 @@ import type { IEventBusModuleService } from "@medusajs/framework/types"
 /**
  * Public Printful webhook endpoint.
  *
- * The payload is a trigger, not a source of truth: we persist it, answer 200,
- * and let the workflow re-read GET /orders/{id} for the real state. Never log
- * the request URL or token.
+ * The payload is a trigger, not a source of truth: we record the event, answer
+ * 200, and let the workflow re-read GET /orders/{id} for the real state. Never
+ * log the request URL or token.
  */
 export async function POST(req: MedusaRequest, res: MedusaResponse) {
   const printful: PrintfulModuleService = req.scope.resolve(PRINTFUL_MODULE)
@@ -63,7 +63,9 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       type,
       printful_order_id: printfulOrderId,
       printful_shipment_id: extractShipmentId(payload),
-      payload: payload as unknown as Record<string, unknown>,
+      // The service keeps only the delivery envelope; the order and its
+      // recipient are never written.
+      payload,
       status: handled ? "received" : "ignored",
     })
   } catch (err) {

@@ -9,6 +9,7 @@ import {
   MedusaError,
   Modules,
 } from "@medusajs/framework/utils"
+import type { MedusaContainer } from "@medusajs/framework/types"
 import { PRINTFUL_MODULE } from "../modules/printful"
 import type PrintfulModuleService from "../modules/printful/service"
 import { PENDING_PRINTFUL_ORDER_ID } from "../modules/printful/service"
@@ -133,336 +134,399 @@ const createPrintfulOrderStep = createStep(
   "printful-create-order",
   async (input: CreatePrintfulOrderInput, { container }) => {
     const printful: PrintfulModuleService = container.resolve(PRINTFUL_MODULE)
-    const orderModule = container.resolve(Modules.ORDER)
     const logger = container.resolve(ContainerRegistrationKeys.LOGGER)
-    const query = container.resolve(ContainerRegistrationKeys.QUERY)
-    const options = await printful.getOptions()
-    const client = await printful.getClient()
 
-    // A link with a real Printful order id means the work is done. A link
-    // still holding the `pending` sentinel does not: it is a claim from an
-    // attempt whose outcome was never established. Treating that as
-    // "already_linked" is what would strand such an order forever — nothing
-    // creates it, and nothing ever looks again.
-    const existing = await printful.findOrderLink(input.order_id)
-    if (existing && !isUnresolvedLink(existing, PENDING_PRINTFUL_ORDER_ID)) {
-      return new StepResponse<CreateResult>({
-        skipped: true,
-        reason: "already_linked",
-        printful_order_id: existing.printful_order_id,
-      })
-    }
+    // Read before the attempt, not after: settling a claim deletes its row,
+    // and the count with it.
+    const before = await printful.findOrderLink(input.order_id)
+    const priorAttempts = isUnresolvedLink(before, PENDING_PRINTFUL_ORDER_ID)
+      ? Number(before?.attempts ?? 0)
+      : 0
 
-    if (existing && classifyPendingClaim(existing) === "in_flight") {
-      // Another run claimed this order moments ago and may be mid-POST.
-      // Settling now would read 404 before its order lands, delete its claim,
-      // and race it with a second create. The order sweep picks the claim up
-      // if that run never finishes.
-      return new StepResponse<CreateResult>({
-        skipped: true,
-        reason: "create_in_progress",
-      })
-    }
-
-    if (existing) {
-      // Recovery, not a second create: a claim is outstanding, so ask Printful
-      // whether the earlier attempt landed rather than POSTing again.
-      const recovered = await reconcileClaim({
-        printful,
-        client,
-        logger,
-        medusaOrderId: input.order_id,
-        claimId: existing.id,
-        cause: new Error("a previous create attempt left an unresolved claim"),
-      })
-
-      if (recovered.status === "found") {
-        return new StepResponse<CreateResult>({
-          skipped: false,
-          printful_order_id: String(recovered.order.id),
-          status: recovered.order.status,
-        })
-      }
-      if (recovered.status === "held") {
-        // Still unknown — hold the claim and surface it. Retrying blindly is
-        // exactly what would duplicate the order.
-        return new StepResponse<CreateResult>({
-          skipped: true,
-          reason: "unverified_claim",
-        })
-      }
-      // `released`: Printful confirmed no such order and the claim is gone, so
-      // fall through and create it properly below.
-    }
-
-    const order = await orderModule.retrieveOrder(input.order_id, {
-      // `shipping_methods` carries the `data` blob `validateFulfillmentData`
-      // recorded at selection, which is the only evidence on the order that
-      // Printful confirmed the method the customer paid for.
-      relations: ["items", "shipping_address", "shipping_methods"],
-    })
-
-    // Recovery runs long after checkout, from the order sweep. An order the
-    // merchant has since canceled must not be printed and shipped.
-    if (order.status === "canceled") {
-      return new StepResponse<CreateResult>({
-        skipped: true,
-        reason: "order_canceled",
-      })
-    }
-
-    const items: PrintfulOrderItemInput[] = []
-    const unresolved: string[] = []
-
-    // A bundle is one Medusa line standing for several Printful products, and
-    // the loop below resolves one line to one item. Left unexpanded, a
-    // three-item bundle would ship a single thing — or, since a bundle variant
-    // has no Printful link of its own, be skipped as `no_printful_items` and
-    // ship nothing at all.
-    //
-    // Every `printful_*` key below is read from the VARIANT, never from the
-    // line item: the Store API stores line metadata exactly as the customer
-    // sent it, so trusting it would let a buyer choose what Printful prints
-    // and bills the merchant for. See `withVariantMetadata`.
-    const variantMetadata = new Map<string, Record<string, unknown>>()
-    const loadVariantMetadata = async (
-      ids: Array<string | null | undefined>
-    ) => {
-      const missing = [
-        ...new Set(ids.filter((id): id is string => !!id)),
-      ].filter((id) => !variantMetadata.has(id))
-      if (!missing.length) {
-        return
-      }
-      const { data } = await query.graph({
-        entity: "product_variant",
-        fields: ["id", "metadata"],
-        filters: { id: missing },
-      })
-      for (const row of (Array.isArray(data) ? data : []) as Array<{
-        id: string
-        metadata?: Record<string, unknown> | null
-      }>) {
-        variantMetadata.set(row.id, row.metadata ?? {})
-      }
-    }
-
-    await loadVariantMetadata((order.items ?? []).map((i) => i.variant_id))
-    const lines = expandOrderLines(
-      withVariantMetadata(
-        (order.items ?? []).map((item) => ({
-          id: item.id,
-          variant_id: item.variant_id,
-          title: item.title,
-          quantity: Number(item.quantity),
-        })),
-        variantMetadata
-      )
-    )
-    // Bundle members are variants in their own right and may need the
-    // metadata fallback below just like a plain line.
-    await loadVariantMetadata(lines.map((l) => l.variant_id))
-
-    for (const item of lines) {
-      const variantId = item.variant_id
-      if (!variantId) {
-        unresolved.push(item.id)
-        continue
-      }
-
-      let syncVariantId: string | undefined
-
-      const link = await printful.findVariantLinkByMedusaId(variantId)
-      if (link) {
-        syncVariantId = link.printful_sync_variant_id
-      } else {
-        // A variant the sync stamped but never linked (see variant-links.ts).
-        const meta = variantMetadata.get(variantId) ?? {}
-        if (meta.printful_sync_variant_id) {
-          syncVariantId = String(meta.printful_sync_variant_id)
-        }
-      }
-
-      if (!syncVariantId) {
-        unresolved.push(item.title || item.id)
-        continue
-      }
-
-      items.push({
-        sync_variant_id: Number(syncVariantId),
-        quantity: Number(item.quantity),
-        name: item.title ?? undefined,
-        external_id: item.id,
-      })
-    }
-
-    if (!items.length) {
-      return new StepResponse<CreateResult>({
-        skipped: true,
-        reason: "no_printful_items",
-      })
-    }
-
-    if (unresolved.length && !options.allowPartialOrders) {
-      throw new MedusaError(
-        MedusaError.Types.INVALID_DATA,
-        `Order ${input.order_id} has non-Printful items: ${unresolved.join(", ")}`
-      )
-    }
-
-    const addr = order.shipping_address
-    if (!addr) {
-      throw new MedusaError(
-        MedusaError.Types.INVALID_DATA,
-        `Order ${input.order_id} has no shipping address`
-      )
-    }
-
-    const countryCode = (addr.country_code || "").toUpperCase()
-    const recipient: PrintfulRecipient = {
-      name:
-        [addr.first_name, addr.last_name].filter(Boolean).join(" ") ||
-        "Customer",
-      address1: addr.address_1 || "",
-      address2: addr.address_2 || undefined,
-      city: addr.city || "",
-      state_code: resolveStateCode(addr.province, countryCode),
-      country_code: countryCode,
-      zip: addr.postal_code || "",
-      phone: addr.phone || undefined,
-      email: order.email || undefined,
-    }
-
-    // Checked before the claim, not after: `external_id` is what makes a
-    // failed create recoverable, so an order id Printful cannot store as one
-    // must fail loudly here rather than reach the API and leave a claim that
-    // can never be reconciled.
-    assertUsableExternalId(order.id)
-
-    // Insert-first: atomically claim the order before hitting the Printful API.
-    // Two concurrent payment.captured events cannot both pass this point — the
-    // unique index on medusa_order_id makes the loser return null → skip,
-    // preventing a duplicate Printful order.
-    const claim = await printful.claimOrderLink(order.id)
-    if (!claim) {
-      return new StepResponse<CreateResult>({
-        skipped: true,
-        reason: "already_linked",
-      })
-    }
-
-    // A pure read of what was recorded at selection — no Printful call on the
-    // order path. Omitted unless Printful itself confirmed the method for this
-    // cart, in which case Printful picks the method as it does today.
-    const shipping = shippingOverrideFor(order.shipping_methods)
-
-    const payload: PrintfulCreateOrderInput = {
-      external_id: order.id,
-      recipient,
-      ...(shipping ? { shipping } : {}),
-      items,
-      confirm: options.autoSubmitOrders !== false,
-    }
-
-    let pfOrder
     try {
-      pfOrder = await client.createOrder(payload)
+      // attemptCreate is typed to return a StepResponse; the lint rule only
+      // recognises one constructed inline.
+      // eslint-disable-next-line @medusajs/step-must-return-step-response
+      return await attemptCreate(input, container)
     } catch (err) {
-      // The claim is held until we know what became of the order. Releasing it
-      // unconditionally is only correct when the request never reached
-      // Printful; a create that timed out *after* Printful accepted it looks
-      // identical from here, and releasing on that path lets the next
-      // payment.captured print and ship the customer's item a second time.
-      if (classifyCreateFailure(err) === "not_created") {
-        // Printful read the request and refused it — nothing exists to collide
-        // with. Free the claim so a retry can create the order.
-        await printful.deletePrintfulOrderLinks(claim.id)
-        throw err
-      }
-
-      // Outcome unknown (timeout, dropped socket, 5xx, 429, or a 409 that may
-      // mean "this external_id already exists"). Ask Printful directly.
-      const recovered = await reconcileClaim({
-        printful,
-        client,
-        logger,
-        medusaOrderId: order.id,
-        claimId: claim.id,
-        cause: err,
-      })
-
-      if (recovered.status === "released") {
-        // Confirmed absent: the claim is gone and a retry may create it.
-        throw err
-      }
-      if (recovered.status === "held") {
-        // Still unknown. The claim stays so no retry can duplicate the order.
-        throw err
-      }
-
-      pfOrder = recovered.order
-      logger.info(
-        `Printful order ${pfOrder.id} for ${order.id} existed despite a failed create; recovered.`
-      )
-    }
-
-    await printful.updatePrintfulOrderLinks({
-      id: claim.id,
-      printful_order_id: String(pfOrder.id),
-      status: pfOrder.status || "created",
-    })
-
-    // Printful returns the real costs with the created order, so no separate
-    // estimate call is needed. The identity keys ride along unconditionally —
-    // the admin widget gates on `printful_order_id`, so a costless order that
-    // wrote only costs would stay invisible until the first webhook.
-    //
-    // Written best-effort: the order exists in Printful either way, and losing
-    // the margin figure must never fail the workflow and roll back a real
-    // order. Both the Printful order and the link row exist by this point, so
-    // failing the step would trigger compensation and release the link for an
-    // order Printful is already fulfilling.
-    const orderMetadata = planCreatedOrderMetadata(pfOrder)
-    try {
-      // Under the same advisory lock the webhook path takes. Both do a
-      // read-modify-write of `metadata`, and the link became resolvable a few
-      // lines above — so a webhook arriving in that window could re-read the
-      // order, write a newer `printful_status`, and have this write clobber it
-      // back to the status captured at creation. Serializing the two makes the
-      // last writer win on a value it actually read.
-      await printful.withOrderLock(String(pfOrder.id), async () => {
-        // `orderRow` rather than `existing` — that name is taken by the
-        // order-link lookup earlier in this step.
-        const orderRow = await orderModule.retrieveOrder(input.order_id, {
-          select: ["id", "metadata"],
+      // Every way an attempt can fail with no Printful order behind it — a
+      // database error before the claim, an order Printful refused, a claim
+      // released because Printful confirmed it had nothing — used to end in a
+      // log line and nothing else. Record it where the order sweep looks, so
+      // the order is retried rather than lost.
+      await printful
+        .recordFailedOrderAttempt({
+          medusa_order_id: input.order_id,
+          attempts: priorAttempts + 1,
+          error_message: err instanceof Error ? err.message : String(err),
         })
-        // Unless a webhook took the lock first and stamped this very Printful
-        // order, this is the plugin's first write, and every `printful_*` key
-        // already here came from the customer's cart (see order-metadata.ts).
-        // The id cannot be planted in advance: Printful assigns it above.
-        const base =
-          printfulOrderIdFrom(orderRow.metadata) === String(pfOrder.id)
-            ? (orderRow.metadata ?? {})
-            : withoutPrintfulKeys(orderRow.metadata)
-        await orderModule.updateOrders(input.order_id, {
-          metadata: { ...base, ...orderMetadata },
+        .catch((recordErr: unknown) => {
+          logger.error(
+            `Printful: could not record the failed create for ${input.order_id}: ${
+              recordErr instanceof Error ? recordErr.message : String(recordErr)
+            }`
+          )
         })
-      })
-    } catch (err) {
-      logger.error(
-        `Printful order ${pfOrder.id}: could not store order metadata: ${
-          err instanceof Error ? err.message : String(err)
-        }`
-      )
+      throw err
     }
-
-    return new StepResponse<CreateResult>({
-      skipped: false,
-      printful_order_id: String(pfOrder.id),
-      status: pfOrder.status,
-    })
   }
 )
+
+/**
+ * One attempt to give an order to Printful. The step around it records a
+ * failure for the order sweep; everything here may simply throw.
+ */
+async function attemptCreate(
+  input: CreatePrintfulOrderInput,
+  container: MedusaContainer
+): Promise<StepResponse<CreateResult>> {
+  const printful: PrintfulModuleService = container.resolve(PRINTFUL_MODULE)
+  const orderModule = container.resolve(Modules.ORDER)
+  const logger = container.resolve(ContainerRegistrationKeys.LOGGER)
+  const query = container.resolve(ContainerRegistrationKeys.QUERY)
+  const options = await printful.getOptions()
+  const client = await printful.getClient()
+
+  // A link with a real Printful order id means the work is done. A link
+  // still holding the `pending` sentinel does not: it is a claim from an
+  // attempt whose outcome was never established. Treating that as
+  // "already_linked" is what would strand such an order forever — nothing
+  // creates it, and nothing ever looks again.
+  const existing = await printful.findOrderLink(input.order_id)
+  if (existing && !isUnresolvedLink(existing, PENDING_PRINTFUL_ORDER_ID)) {
+    return new StepResponse<CreateResult>({
+      skipped: true,
+      reason: "already_linked",
+      printful_order_id: existing.printful_order_id,
+    })
+  }
+
+  const claimState = existing ? classifyPendingClaim(existing) : null
+
+  if (claimState === "in_flight") {
+    // Another run claimed this order moments ago and may be mid-POST.
+    // Settling now would read 404 before its order lands, delete its claim,
+    // and race it with a second create. The order sweep picks the claim up
+    // if that run never finishes.
+    return new StepResponse<CreateResult>({
+      skipped: true,
+      reason: "create_in_progress",
+    })
+  }
+
+  if (claimState === "backoff") {
+    // An earlier attempt failed recently. The order sweep tries again once
+    // its backoff has passed; trying now would only repeat the failure.
+    return new StepResponse<CreateResult>({
+      skipped: true,
+      reason: "retry_scheduled",
+    })
+  }
+
+  if (existing) {
+    // Recovery, not a second create: a claim is outstanding, so ask Printful
+    // whether the earlier attempt landed rather than POSTing again.
+    const recovered = await reconcileClaim({
+      printful,
+      client,
+      logger,
+      medusaOrderId: input.order_id,
+      claimId: existing.id,
+      cause: new Error("a previous create attempt left an unresolved claim"),
+    })
+
+    if (recovered.status === "found") {
+      return new StepResponse<CreateResult>({
+        skipped: false,
+        printful_order_id: String(recovered.order.id),
+        status: recovered.order.status,
+      })
+    }
+    if (recovered.status === "held") {
+      // Still unknown — hold the claim and surface it. Retrying blindly is
+      // exactly what would duplicate the order. Counted as a failed attempt,
+      // so a lookup that keeps failing backs off like any other failure.
+      await printful
+        .updatePrintfulOrderLinks({
+          id: existing.id,
+          attempts: Number(existing.attempts ?? 0) + 1,
+        })
+        .catch(() => {
+          // Best effort — only the retry cadence depends on it.
+        })
+      return new StepResponse<CreateResult>({
+        skipped: true,
+        reason: "unverified_claim",
+      })
+    }
+    // `released`: Printful confirmed no such order and the claim is gone, so
+    // fall through and create it properly below.
+  }
+
+  const order = await orderModule.retrieveOrder(input.order_id, {
+    // `shipping_methods` carries the `data` blob `validateFulfillmentData`
+    // recorded at selection, which is the only evidence on the order that
+    // Printful confirmed the method the customer paid for.
+    relations: ["items", "shipping_address", "shipping_methods"],
+  })
+
+  // Recovery runs long after checkout, from the order sweep. An order the
+  // merchant has since canceled must not be printed and shipped.
+  if (order.status === "canceled") {
+    return new StepResponse<CreateResult>({
+      skipped: true,
+      reason: "order_canceled",
+    })
+  }
+
+  const items: PrintfulOrderItemInput[] = []
+  const unresolved: string[] = []
+
+  // A bundle is one Medusa line standing for several Printful products, and
+  // the loop below resolves one line to one item. Left unexpanded, a
+  // three-item bundle would ship a single thing — or, since a bundle variant
+  // has no Printful link of its own, be skipped as `no_printful_items` and
+  // ship nothing at all.
+  //
+  // Every `printful_*` key below is read from the VARIANT, never from the
+  // line item: the Store API stores line metadata exactly as the customer
+  // sent it, so trusting it would let a buyer choose what Printful prints
+  // and bills the merchant for. See `withVariantMetadata`.
+  const variantMetadata = new Map<string, Record<string, unknown>>()
+  const loadVariantMetadata = async (ids: Array<string | null | undefined>) => {
+    const missing = [...new Set(ids.filter((id): id is string => !!id))].filter(
+      (id) => !variantMetadata.has(id)
+    )
+    if (!missing.length) {
+      return
+    }
+    const { data } = await query.graph({
+      entity: "product_variant",
+      fields: ["id", "metadata"],
+      filters: { id: missing },
+    })
+    for (const row of (Array.isArray(data) ? data : []) as Array<{
+      id: string
+      metadata?: Record<string, unknown> | null
+    }>) {
+      variantMetadata.set(row.id, row.metadata ?? {})
+    }
+  }
+
+  await loadVariantMetadata((order.items ?? []).map((i) => i.variant_id))
+  const lines = expandOrderLines(
+    withVariantMetadata(
+      (order.items ?? []).map((item) => ({
+        id: item.id,
+        variant_id: item.variant_id,
+        title: item.title,
+        quantity: Number(item.quantity),
+      })),
+      variantMetadata
+    )
+  )
+  // Bundle members are variants in their own right and may need the
+  // metadata fallback below just like a plain line.
+  await loadVariantMetadata(lines.map((l) => l.variant_id))
+
+  for (const item of lines) {
+    const variantId = item.variant_id
+    if (!variantId) {
+      unresolved.push(item.id)
+      continue
+    }
+
+    let syncVariantId: string | undefined
+
+    const link = await printful.findVariantLinkByMedusaId(variantId)
+    if (link) {
+      syncVariantId = link.printful_sync_variant_id
+    } else {
+      // A variant the sync stamped but never linked (see variant-links.ts).
+      const meta = variantMetadata.get(variantId) ?? {}
+      if (meta.printful_sync_variant_id) {
+        syncVariantId = String(meta.printful_sync_variant_id)
+      }
+    }
+
+    if (!syncVariantId) {
+      unresolved.push(item.title || item.id)
+      continue
+    }
+
+    items.push({
+      sync_variant_id: Number(syncVariantId),
+      quantity: Number(item.quantity),
+      name: item.title ?? undefined,
+      external_id: item.id,
+    })
+  }
+
+  if (!items.length) {
+    return new StepResponse<CreateResult>({
+      skipped: true,
+      reason: "no_printful_items",
+    })
+  }
+
+  if (unresolved.length && !options.allowPartialOrders) {
+    throw new MedusaError(
+      MedusaError.Types.INVALID_DATA,
+      `Order ${input.order_id} has non-Printful items: ${unresolved.join(", ")}`
+    )
+  }
+
+  const addr = order.shipping_address
+  if (!addr) {
+    throw new MedusaError(
+      MedusaError.Types.INVALID_DATA,
+      `Order ${input.order_id} has no shipping address`
+    )
+  }
+
+  const countryCode = (addr.country_code || "").toUpperCase()
+  const recipient: PrintfulRecipient = {
+    name:
+      [addr.first_name, addr.last_name].filter(Boolean).join(" ") || "Customer",
+    address1: addr.address_1 || "",
+    address2: addr.address_2 || undefined,
+    city: addr.city || "",
+    state_code: resolveStateCode(addr.province, countryCode),
+    country_code: countryCode,
+    zip: addr.postal_code || "",
+    phone: addr.phone || undefined,
+    email: order.email || undefined,
+  }
+
+  // Checked before the claim, not after: `external_id` is what makes a
+  // failed create recoverable, so an order id Printful cannot store as one
+  // must fail loudly here rather than reach the API and leave a claim that
+  // can never be reconciled.
+  assertUsableExternalId(order.id)
+
+  // Insert-first: atomically claim the order before hitting the Printful API.
+  // Two concurrent payment.captured events cannot both pass this point — the
+  // unique index on medusa_order_id makes the loser return null → skip,
+  // preventing a duplicate Printful order.
+  const claim = await printful.claimOrderLink(order.id)
+  if (!claim) {
+    return new StepResponse<CreateResult>({
+      skipped: true,
+      reason: "already_linked",
+    })
+  }
+
+  // A pure read of what was recorded at selection — no Printful call on the
+  // order path. Omitted unless Printful itself confirmed the method for this
+  // cart, in which case Printful picks the method as it does today.
+  const shipping = shippingOverrideFor(order.shipping_methods)
+
+  const payload: PrintfulCreateOrderInput = {
+    external_id: order.id,
+    recipient,
+    ...(shipping ? { shipping } : {}),
+    items,
+    confirm: options.autoSubmitOrders !== false,
+  }
+
+  let pfOrder
+  try {
+    pfOrder = await client.createOrder(payload)
+  } catch (err) {
+    // The claim is held until we know what became of the order. Releasing it
+    // unconditionally is only correct when the request never reached
+    // Printful; a create that timed out *after* Printful accepted it looks
+    // identical from here, and releasing on that path lets the next
+    // payment.captured print and ship the customer's item a second time.
+    if (classifyCreateFailure(err) === "not_created") {
+      // Printful read the request and refused it — nothing exists to collide
+      // with. Free the claim so a retry can create the order.
+      await printful.deletePrintfulOrderLinks(claim.id)
+      throw err
+    }
+
+    // Outcome unknown (timeout, dropped socket, 5xx, 429, or a 409 that may
+    // mean "this external_id already exists"). Ask Printful directly.
+    const recovered = await reconcileClaim({
+      printful,
+      client,
+      logger,
+      medusaOrderId: order.id,
+      claimId: claim.id,
+      cause: err,
+    })
+
+    if (recovered.status === "released") {
+      // Confirmed absent: the claim is gone and a retry may create it.
+      throw err
+    }
+    if (recovered.status === "held") {
+      // Still unknown. The claim stays so no retry can duplicate the order.
+      throw err
+    }
+
+    pfOrder = recovered.order
+    logger.info(
+      `Printful order ${pfOrder.id} for ${order.id} existed despite a failed create; recovered.`
+    )
+  }
+
+  await printful.updatePrintfulOrderLinks({
+    id: claim.id,
+    printful_order_id: String(pfOrder.id),
+    status: pfOrder.status || "created",
+  })
+
+  // Printful returns the real costs with the created order, so no separate
+  // estimate call is needed. The identity keys ride along unconditionally —
+  // the admin widget gates on `printful_order_id`, so a costless order that
+  // wrote only costs would stay invisible until the first webhook.
+  //
+  // Written best-effort: the order exists in Printful either way, and losing
+  // the margin figure must never fail the workflow and roll back a real
+  // order. Both the Printful order and the link row exist by this point, so
+  // failing the step would trigger compensation and release the link for an
+  // order Printful is already fulfilling.
+  const orderMetadata = planCreatedOrderMetadata(pfOrder)
+  try {
+    // Under the same advisory lock the webhook path takes. Both do a
+    // read-modify-write of `metadata`, and the link became resolvable a few
+    // lines above — so a webhook arriving in that window could re-read the
+    // order, write a newer `printful_status`, and have this write clobber it
+    // back to the status captured at creation. Serializing the two makes the
+    // last writer win on a value it actually read.
+    await printful.withOrderLock(String(pfOrder.id), async () => {
+      // `orderRow` rather than `existing` — that name is taken by the
+      // order-link lookup earlier in this step.
+      const orderRow = await orderModule.retrieveOrder(input.order_id, {
+        select: ["id", "metadata"],
+      })
+      // Unless a webhook took the lock first and stamped this very Printful
+      // order, this is the plugin's first write, and every `printful_*` key
+      // already here came from the customer's cart (see order-metadata.ts).
+      // The id cannot be planted in advance: Printful assigns it above.
+      const base =
+        printfulOrderIdFrom(orderRow.metadata) === String(pfOrder.id)
+          ? (orderRow.metadata ?? {})
+          : withoutPrintfulKeys(orderRow.metadata)
+      await orderModule.updateOrders(input.order_id, {
+        metadata: { ...base, ...orderMetadata },
+      })
+    })
+  } catch (err) {
+    logger.error(
+      `Printful order ${pfOrder.id}: could not store order metadata: ${
+        err instanceof Error ? err.message : String(err)
+      }`
+    )
+  }
+
+  return new StepResponse<CreateResult>({
+    skipped: false,
+    printful_order_id: String(pfOrder.id),
+    status: pfOrder.status,
+  })
+}
 
 export const createPrintfulOrderWorkflow = createWorkflow(
   "printful-create-order",

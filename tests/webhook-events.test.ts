@@ -4,6 +4,7 @@ import {
   extractShipmentId,
   PRINTFUL_WEBHOOK_TYPES,
   verifyWebhookToken,
+  webhookEnvelope,
 } from "../src/utils/webhook-events"
 
 describe("verifyWebhookToken", () => {
@@ -189,5 +190,57 @@ describe("deriveEventId", () => {
   it("excludes order_updated from the registered allowlist", () => {
     expect(PRINTFUL_WEBHOOK_TYPES).not.toContain("order_updated")
     expect(PRINTFUL_WEBHOOK_TYPES).toHaveLength(4)
+  })
+})
+
+describe("webhookEnvelope", () => {
+  const recipient = {
+    name: "Jane Doe",
+    address1: "1 Main St",
+    city: "Springfield",
+    email: "jane@example.com",
+    phone: "+1 555 0100",
+  }
+
+  it("keeps the delivery envelope and drops the order", () => {
+    expect(
+      webhookEnvelope({
+        type: "package_shipped",
+        created: 1_700_000_000,
+        retries: 2,
+        store: 42,
+        data: { order: { id: 7, recipient }, shipment: { id: 9 } },
+      })
+    ).toEqual({
+      type: "package_shipped",
+      created: 1_700_000_000,
+      retries: 2,
+      store: 42,
+    })
+  })
+
+  it("drops keys outside the envelope", () => {
+    const envelope = webhookEnvelope({
+      type: "order_failed",
+      recipient,
+    } as never)
+    expect(envelope).toEqual({ type: "order_failed" })
+    expect(JSON.stringify(envelope)).not.toContain("Jane")
+  })
+
+  it("keeps only primitives, so data cannot ride in under an envelope key", () => {
+    expect(
+      webhookEnvelope({
+        type: { recipient } as never,
+        created: [recipient] as never,
+        store: null as never,
+        retries: 1,
+      })
+    ).toEqual({ retries: 1 })
+  })
+
+  it("returns an empty envelope for a body that is not an object", () => {
+    expect(webhookEnvelope(null as never)).toEqual({})
+    expect(webhookEnvelope([1, 2] as never)).toEqual({})
   })
 })

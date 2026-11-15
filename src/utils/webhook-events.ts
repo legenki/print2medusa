@@ -45,6 +45,32 @@ export type PrintfulWebhookPayload = {
 }
 
 /**
+ * The delivery envelope of a webhook — everything except `data`.
+ *
+ * `data` carries the whole Printful order: the recipient's name, address,
+ * email and phone. Nothing reads it back once the event is stored, because the
+ * apply workflow re-fetches the order from the API, so keeping it would be
+ * personal data held for no purpose. The envelope keeps what helps when
+ * debugging a delivery (which store, when, how many redeliveries) and holds no
+ * one's details. The ids the workflow does need are already their own columns.
+ *
+ * Only primitives are copied, so a hostile `type` object cannot smuggle `data`
+ * back in under another key.
+ */
+export function webhookEnvelope(
+  payload: PrintfulWebhookPayload
+): Record<string, string | number> {
+  const envelope: Record<string, string | number> = {}
+  for (const key of ["type", "created", "retries", "store"] as const) {
+    const value: unknown = payload?.[key]
+    if (typeof value === "string" || typeof value === "number") {
+      envelope[key] = value
+    }
+  }
+  return envelope
+}
+
+/**
  * Nesting limit for canonicalize. Real Printful payloads are a handful of
  * levels deep; 100 is generous headroom without being unbounded. Without this,
  * a hostile or malformed payload (~5000 levels, well under body-parser's

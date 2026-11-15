@@ -10,9 +10,13 @@ Published on npm as [`@legenki/print2medusa`](https://www.npmjs.com/package/@leg
 
 ## Requirements
 
-- Node.js **20.19+ or 22.12+**, the same as Medusa itself. Node 20 is past end
-  of life; CI runs on 22.
-- Medusa **≥ 2.18.0** (peer dependency `^2.18.0`, tested against 2.21.1)
+- Node.js **20.19+ or 22.12+**, the same as Medusa 2.18–2.21. Medusa 2.22
+  needs **22.22+**. Node 20 is past end of life; CI runs on 22.
+- Medusa **≥ 2.18.0** (peer dependency `^2.18.0`, tested against 2.22.7).
+  Run **2.22.7 or later** if you can: earlier releases ship dependencies with
+  known advisories, among them a critical IP-spoofing bug in `proxy-addr`
+  that affects any store behind a trusted proxy. The plugin has no runtime
+  dependencies of its own; these come with Medusa.
 - Printful store on the **Manual order / API** platform with a private token
   carrying the `orders`, `sync_products` and `webhooks` scopes. `webhooks` is
   needed only to register the webhook from the admin.
@@ -108,13 +112,14 @@ See `examples/basic-store/` for a fuller snippet.
 | Mockup prompts       | Paste-ready prompts per product and colour, in three shapes for the three product classes |
 | Merch bundles        | One Medusa product that expands into several Printful items when the order is placed      |
 | Shipment tracking    | Printful webhooks → Medusa fulfillment + shipment per parcel, with tracking               |
-| Order visibility     | Printful status and per-parcel tracking on the Admin order page                           |
+| Order visibility     | Printful status and per-parcel tracking on the Admin order page — or why it is not there  |
 
 ### Idempotency
 
 - Re-sync updates existing products via link tables (no duplicates) and **upserts variants** — price and assortment changes in Printful reach Medusa; manually-added Medusa variants are left untouched.
 - Concurrent / re-fired payment events will not create a second Printful order: the order is **claimed insert-first** via a unique index on `printful_order_link.medusa_order_id` before the Printful API is called.
 - `POST /orders` is **never retried by the client**. A create whose outcome is unknown (timeout, 5xx) is settled by looking the order up by `external_id` instead. A claim younger than ten minutes is left to the create that owns it, so `order.placed` and `payment.captured` arriving together cannot race. Claims still unresolved after that are settled by the `printful-retry-orders` job every 15 minutes — an order canceled in Medusa in the meantime is never sent.
+- **A paid order that fails to reach Printful is retried, not dropped.** Whatever the cause — a database error before the claim, an address Printful rejects, items with no Printful variant while `allowPartialOrders` is off — the attempt leaves a claim marked `failed` with the reason, and `printful-retry-orders` tries again: after 10 minutes, doubling to at most every 2 hours, and never giving up. Each retry first looks the order up by `external_id`, so it cannot create a second one. The order page shows the reason until it succeeds; fix it there (the address, say) and the next retry sends the order.
 - A parcel whose Medusa fulfillment was created but never marked shipped is **completed on the next webhook or retry**. Canceling a parcel's fulfillment in Medusa does **not** cancel the Printful order; only an order-level fulfillment does.
 - A **bundle line is fulfilled only when every member has shipped**, counted across parcels.
 - Shipping `province` is normalized to the 2-letter `state_code` Printful expects for US/CA.
@@ -159,6 +164,15 @@ cleartext.
 The payload is treated as a **trigger, not a source of truth**: the endpoint
 stores the event, answers `200`, and the workflow re-reads
 `GET /orders/{id}` from Printful for the authoritative state.
+
+**No customer data is kept from a webhook.** Printful sends the whole order,
+recipient included; the event row keeps only its type, the Printful order and
+shipment ids, and the delivery envelope (`created`, `retries`, `store`).
+Events stored by earlier releases are reduced the same way by a migration, so
+run `npx medusa db:migrate` after upgrading. Settled events (`processed`,
+`ignored`) are deleted after **30 days** by the daily
+`printful-prune-webhook-events` job; the newest 200 are always kept, so the
+admin page's webhook health still shows the last delivery in a quiet store.
 
 **An event that cannot be applied yet is kept, not dropped.** A webhook can
 arrive before `payment.captured` has linked its order, and an apply can fail
@@ -530,6 +544,10 @@ and which member is unavailable when one is.
 4. Place a test order and capture payment → Printful receives the order.
 
 ## Local plugin development
+
+Developing the plugin needs Node **22.22+**, which the Medusa 2.22 dev
+dependencies require; stores using it can still run older Node with older
+Medusa.
 
 ```bash
 npm install

@@ -53,14 +53,14 @@
     "prepublishOnly": "medusa plugin:build"
   },
   "devDependencies": {
-    "@medusajs/admin-sdk": "2.21.1",
-    "@medusajs/cli": "2.21.1",
-    "@medusajs/eslint-plugin": "2.21.1",
-    "@medusajs/framework": "2.21.1",
-    "@medusajs/icons": "2.21.1",
-    "@medusajs/medusa": "2.21.1",
-    "@medusajs/test-utils": "2.21.1",
-    "@medusajs/ui": "4.2.5",
+    "@medusajs/admin-sdk": "2.22.7",
+    "@medusajs/cli": "2.22.7",
+    "@medusajs/eslint-plugin": "2.22.7",
+    "@medusajs/framework": "2.22.7",
+    "@medusajs/icons": "2.22.7",
+    "@medusajs/medusa": "2.22.7",
+    "@medusajs/test-utils": "2.22.7",
+    "@medusajs/ui": "4.2.14",
     "@swc/core": "^1.7.28",
     "@types/node": "^20.0.0",
     "@types/react": "^18.3.2",
@@ -87,7 +87,7 @@
     "@medusajs/ui": "^4.2.0"
   },
   "engines": {
-    "node": ">=20"
+    "node": "^20.19.0 || >=22.12.0"
   },
   "packageManager": "npm@11.17.0"
 }

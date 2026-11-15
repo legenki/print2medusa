@@ -2,6 +2,10 @@ import { MedusaService } from "@medusajs/framework/utils"
 import { createHash } from "crypto"
 import { PrintfulClient } from "../../utils/printful-client"
 import type { PrintfulPluginOptions } from "../../utils/types"
+import {
+  webhookEnvelope,
+  type PrintfulWebhookPayload,
+} from "../../utils/webhook-events"
 import PrintfulOrderLink from "./models/printful-order-link"
 import PrintfulProductLink from "./models/printful-product-link"
 import PrintfulSyncLog from "./models/printful-sync-log"
@@ -52,6 +56,15 @@ export const MIN_WEBHOOK_SECRET_LENGTH = 32
 
 /** Attempts before an event is parked as permanently failed. */
 export const MAX_WEBHOOK_ATTEMPTS = 20
+
+/**
+ * Days a settled webhook event is kept before the prune job removes it.
+ *
+ * Long past the point it is useful: Printful stops redelivering an event
+ * within days, and the row's only later reader is the health panel, which
+ * pruneWebhookEvents protects separately.
+ */
+export const WEBHOOK_EVENT_RETENTION_DAYS = 30
 
 /** Backoff: 5 minutes doubling per attempt, capped at 6 hours. */
 export function nextRetryDelayMs(attempts: number): number {
@@ -230,13 +243,17 @@ class PrintfulModuleService extends MedusaService({
   /**
    * Store an inbound event. Returns null when the event_id already exists,
    * which is how redelivered webhooks are absorbed.
+   *
+   * Only the delivery envelope of `payload` is written — see webhookEnvelope.
+   * Stripping here rather than in the route means no caller can store a
+   * recipient's details by passing the whole body.
    */
   async recordWebhookEvent(input: {
     event_id: string
     type: string
     printful_order_id: string
     printful_shipment_id?: string | null
-    payload: Record<string, unknown>
+    payload: PrintfulWebhookPayload
     status?: string
   }) {
     try {
@@ -245,7 +262,7 @@ class PrintfulModuleService extends MedusaService({
         type: input.type,
         printful_order_id: input.printful_order_id,
         printful_shipment_id: input.printful_shipment_id ?? null,
-        payload: input.payload,
+        payload: webhookEnvelope(input.payload),
         status: input.status ?? "received",
         attempts: 0,
         next_retry_at: new Date(),
@@ -277,6 +294,50 @@ class PrintfulModuleService extends MedusaService({
       },
       { take: limit, order: { next_retry_at: "ASC" } }
     )
+  }
+
+  /**
+   * Delete settled webhook events — `processed` and `ignored` — created before
+   * `olderThan`, except the newest `keepNewest` rows of the table. Returns how
+   * many were removed.
+   *
+   * `received` and `deferred` rows are still in flight and `failed` ones wait
+   * for a human, so all three stay whatever their age.
+   *
+   * The newest rows are kept so the health panel, which reads exactly that
+   * window, still sees the last delivery in a store that has gone quiet for a
+   * month. Pruning it would turn "working, nothing lately" into "nothing ever
+   * received".
+   *
+   * A redelivery of a pruned event is stored again as new. That is safe: the
+   * apply workflow re-reads the order from Printful and skips shipments
+   * already recorded on a fulfillment.
+   *
+   * One statement, so the window it protects is the one it deletes against.
+   */
+  async pruneWebhookEvents(
+    olderThan: Date,
+    keepNewest: number
+  ): Promise<number> {
+    return this.baseRepository_.transaction(async (manager) => {
+      const result = await manager.execute<
+        Array<{ id: string }> | { rows?: Array<{ id: string }> }
+      >(
+        `delete from "printful_webhook_event"
+          where "status" in ('processed', 'ignored')
+            and "created_at" < ?
+            and "id" not in (
+              select "id" from "printful_webhook_event"
+               where "deleted_at" is null
+               order by "created_at" desc
+               limit ?
+            )
+          returning "id"`,
+        [olderThan, keepNewest]
+      )
+      const rows = Array.isArray(result) ? result : (result?.rows ?? [])
+      return rows.length
+    })
   }
 
   /**
@@ -347,6 +408,71 @@ class PrintfulModuleService extends MedusaService({
       { printful_order_id: PENDING_PRINTFUL_ORDER_ID },
       { take: limit, order: { created_at: "ASC" } }
     )
+  }
+
+  /**
+   * Leave a durable record of a create attempt that failed with no Printful
+   * order behind it, so the order sweep retries it.
+   *
+   * Without this, the only trace of such a failure was a log line. Order
+   * creation is triggered once, by `payment.captured`; an attempt that failed
+   * before the claim — or one Printful refused, after which the claim is
+   * released — left nothing for the sweep to find, and a paid order never
+   * reached Printful.
+   *
+   * The record is an ordinary unresolved claim: the `pending` sentinel, with
+   * `last_attempt_at` set. That is exactly what the sweep and every later
+   * create already know how to settle — look the order up by `external_id`,
+   * adopt it if Printful has it, create it if not — so a failure needs no
+   * second recovery path. It also still blocks a concurrent create, as any
+   * claim does.
+   *
+   * A link holding a real Printful order id is left alone: that order exists.
+   * A held claim keeps the reason reconcileClaim wrote, which says more than
+   * the error that followed it.
+   */
+  async recordFailedOrderAttempt(input: {
+    medusa_order_id: string
+    attempts: number
+    error_message: string
+  }): Promise<void> {
+    const errorMessage = input.error_message.slice(0, 1000)
+    const now = new Date()
+    const link = await this.findOrderLink(input.medusa_order_id)
+
+    if (link) {
+      if (link.printful_order_id !== PENDING_PRINTFUL_ORDER_ID) {
+        return
+      }
+      await this.updatePrintfulOrderLinks({
+        id: link.id,
+        attempts: input.attempts,
+        last_attempt_at: now,
+        ...(link.status === "unverified"
+          ? {}
+          : { status: "failed", error_message: errorMessage }),
+      })
+      return
+    }
+
+    try {
+      await this.createPrintfulOrderLinks({
+        medusa_order_id: input.medusa_order_id,
+        printful_order_id: PENDING_PRINTFUL_ORDER_ID,
+        external_id: input.medusa_order_id,
+        status: "failed",
+        error_message: errorMessage,
+        last_attempt_at: now,
+        attempts: input.attempts,
+      })
+    } catch (err) {
+      // Another run claimed the order in the meantime. Its claim now carries
+      // the order, and it records its own outcome.
+      if (isUniqueViolation(err)) {
+        return
+      }
+      throw err
+    }
   }
 
   async getLatestSyncLog() {

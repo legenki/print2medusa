@@ -21,6 +21,15 @@ type PrintfulShipment = {
   reshipment?: boolean
 }
 
+/** What `/admin/printful/orders/:id` reports about the order's link. */
+type OrderLinkState = {
+  printful_order_id: string | null
+  status: string | null
+  /** Why the last create attempt failed, while no Printful order exists. */
+  error_message?: string | null
+  last_attempt_at?: string | null
+}
+
 /** Printful states that mean a human should look at the order; mirrors order-state.ts. */
 const ATTENTION_STATES = new Set(["failed", "canceled", "onhold"])
 
@@ -57,7 +66,7 @@ const PrintfulOrderWidget = ({ data }: DetailWidgetProps<AdminOrder>) => {
   // `metadata.printful_order_id`: Medusa copies the customer's cart metadata
   // onto the order, so that key alone proves nothing. Without a link the
   // widget stays hidden however Printful-like the metadata looks.
-  const [printfulOrderId, setPrintfulOrderId] = useState<string | null>(null)
+  const [link, setLink] = useState<OrderLinkState | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -68,11 +77,11 @@ const PrintfulOrderWidget = ({ data }: DetailWidgetProps<AdminOrder>) => {
         if (!res.ok) {
           throw new Error(`Status ${res.status}`)
         }
-        return res.json() as Promise<{ printful_order_id: string | null }>
+        return res.json() as Promise<OrderLinkState>
       })
       .then((body) => {
         if (!cancelled) {
-          setPrintfulOrderId(body.printful_order_id)
+          setLink(body)
         }
       })
       .catch((e) => {
@@ -84,8 +93,37 @@ const PrintfulOrderWidget = ({ data }: DetailWidgetProps<AdminOrder>) => {
     }
   }, [data.id])
 
+  const printfulOrderId = link?.printful_order_id ?? null
+
   if (!printfulOrderId) {
-    return null
+    // A paid order with no Printful order behind it, after an attempt failed.
+    // The order sweep keeps retrying it; this is where a person learns that
+    // it is stuck, and why. A claim with no error is a create in progress.
+    return link?.error_message ? (
+      <Container className="divide-y p-0">
+        <div className="flex items-center justify-between px-6 py-4">
+          <Heading level="h2">Printful</Heading>
+          <Badge color="red">
+            {link.status === "unverified" ? "unverified" : "not created"}
+          </Badge>
+        </div>
+        <div className="px-6 py-4 flex flex-col gap-2">
+          <Text size="small">
+            {link.status === "unverified"
+              ? "It is not yet known whether Printful received this order. The plugin keeps checking and will not send it twice."
+              : "This order has not reached Printful. The plugin retries it automatically; if it keeps failing, fix the cause below."}
+          </Text>
+          <Text size="small" className="text-ui-fg-subtle">
+            {link.error_message.slice(0, 300)}
+          </Text>
+          {link.last_attempt_at ? (
+            <Text size="small" className="text-ui-fg-subtle">
+              Last attempt: {new Date(link.last_attempt_at).toLocaleString()}
+            </Text>
+          ) : null}
+        </div>
+      </Container>
+    ) : null
   }
 
   const metadata = (data.metadata ?? {}) as Record<string, unknown>

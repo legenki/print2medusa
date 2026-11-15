@@ -9,7 +9,15 @@ import {
   ModulesSdkUtils,
   toMikroOrmEntities,
 } from "@medusajs/framework/utils"
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest"
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+} from "vitest"
 import { POST as webhookRoute } from "../src/api/hooks/printful/[token]/route"
 import { PRINTFUL_MODULE } from "../src/modules/printful"
 import PrintfulOrderLink from "../src/modules/printful/models/printful-order-link"
@@ -19,13 +27,15 @@ import PrintfulVariantLink from "../src/modules/printful/models/printful-variant
 import PrintfulWebhookEvent from "../src/modules/printful/models/printful-webhook-event"
 import PrintfulModuleServiceClass, {
   MAX_WEBHOOK_ATTEMPTS,
+  PENDING_PRINTFUL_ORDER_ID,
 } from "../src/modules/printful/service"
 import type PrintfulModuleService from "../src/modules/printful/service"
 import { planOrderStateActions } from "../src/utils/order-state"
 import { PRINTFUL_WEBHOOK_RECEIVED } from "../src/utils/webhook-events"
 import { PrintfulClient } from "../src/utils/printful-client"
 import applyOrderStatusWorkflow from "../src/workflows/apply-order-status"
-import { runAllMigrations } from "./support/migrations"
+import createPrintfulOrderWorkflow from "../src/workflows/create-printful-order"
+import { runAllMigrations, runMigration } from "./support/migrations"
 
 /**
  * Integration tests for the public Printful webhook endpoint, run against a
@@ -352,6 +362,39 @@ describe("POST /hooks/printful/:token", () => {
     })
   })
 
+  it("stores the delivery envelope, never the recipient", async () => {
+    // Printful sends the whole order, recipient included. Nothing reads it
+    // back — the workflow re-fetches the order — so none of it may be kept.
+    const body = shippedPayload({ orderId: 1009, shipmentId: 5009 })
+    const order = body.data.order as Record<string, unknown>
+    order.recipient = {
+      name: "Jane Doe",
+      address1: "1 Main St",
+      city: "Springfield",
+      email: "jane@example.com",
+      phone: "+1 555 0100",
+    }
+
+    const res = await postWebhook(WEBHOOK_SECRET, body)
+    expect(res.statusCode).toBe(200)
+
+    const rows = await pg.raw(
+      `select payload, payload::text as raw from printful_webhook_event
+        where printful_order_id = ?`,
+      ["1009"]
+    )
+    expect(rows.rows).toHaveLength(1)
+    expect(rows.rows[0].payload).toEqual({
+      type: "package_shipped",
+      created: 1_700_000_000,
+      retries: 0,
+      store: 42,
+    })
+    for (const detail of ["Jane", "Main St", "example.com", "555"]) {
+      expect(rows.rows[0].raw).not.toContain(detail)
+    }
+  })
+
   it("hands the stored event to the subscriber via the Event Bus", async () => {
     // The route stores the row and emits; the subscriber runs the workflow.
     // Asserting only on the row would leave that seam untested — a typo in the
@@ -583,6 +626,294 @@ describe("POST /hooks/printful/:token", () => {
     expect(rows.rows[0].status).not.toBe("failed")
     // Deferred means "come back later", so it must carry a retry time.
     expect(rows.rows[0].next_retry_at).toBeTruthy()
+  })
+})
+
+describe("Migration20261115000000 scrubs stored payloads", () => {
+  async function insertRaw(eventId: string, payloadJson: string) {
+    await pg.raw(
+      `insert into printful_webhook_event
+         (id, event_id, type, printful_order_id, payload)
+       values (?, ?, 'package_shipped', '1', ?::jsonb)`,
+      [`row-${eventId}`, eventId, payloadJson]
+    )
+  }
+
+  async function payloadOf(eventId: string) {
+    const rows = await pg.raw(
+      `select payload from printful_webhook_event where event_id = ?`,
+      [eventId]
+    )
+    return rows.rows[0].payload
+  }
+
+  it("reduces every row to its envelope, as webhookEnvelope does", async () => {
+    await insertRaw(
+      "full",
+      JSON.stringify({
+        type: "package_shipped",
+        created: 1_700_000_000,
+        retries: 1,
+        store: 42,
+        data: { order: { id: 1, recipient: { name: "Jane Doe" } } },
+      })
+    )
+    await insertRaw(
+      "smuggled",
+      JSON.stringify({ type: { name: "Jane Doe" }, store: 42, extra: "x" })
+    )
+    await insertRaw("array", JSON.stringify([{ name: "Jane Doe" }]))
+    await insertRaw("empty", "{}")
+    await pg.raw(
+      `update printful_webhook_event set deleted_at = now() where event_id = 'smuggled'`
+    )
+
+    await runMigration(pg, "Migration20261115000000")
+
+    expect(await payloadOf("full")).toEqual({
+      type: "package_shipped",
+      created: 1_700_000_000,
+      retries: 1,
+      store: 42,
+    })
+    // Soft-deleted rows are still rows: they are scrubbed too.
+    expect(await payloadOf("smuggled")).toEqual({ store: 42 })
+    expect(await payloadOf("array")).toEqual({})
+    expect(await payloadOf("empty")).toEqual({})
+
+    const leaked = await pg.raw(
+      `select count(*)::int as count from printful_webhook_event
+        where payload::text like '%Jane%'`
+    )
+    expect(leaked.rows[0].count).toBe(0)
+  })
+})
+
+describe("pruneWebhookEvents", () => {
+  const DAY = 24 * 60 * 60 * 1000
+
+  async function seedAt(key: string, status: string, ageDays: number) {
+    await pg.raw(
+      `insert into printful_webhook_event
+         (id, event_id, type, printful_order_id, status, created_at)
+       values (?, ?, 'package_shipped', '1', ?, ?)`,
+      [
+        `prune-${key}`,
+        `prune-${key}`,
+        status,
+        new Date(Date.now() - ageDays * DAY),
+      ]
+    )
+  }
+
+  async function remaining(): Promise<string[]> {
+    const rows = await pg.raw(
+      `select event_id from printful_webhook_event order by event_id`
+    )
+    return rows.rows.map((row: { event_id: string }) => row.event_id)
+  }
+
+  const cutoff = () => new Date(Date.now() - 30 * DAY)
+
+  it("removes only settled events older than the cutoff", async () => {
+    await seedAt("old-processed", "processed", 40)
+    await seedAt("old-ignored", "ignored", 40)
+    // Each kept row is kept for exactly one reason.
+    await seedAt("old-failed", "failed", 40)
+    await seedAt("old-received", "received", 40)
+    await seedAt("old-deferred", "deferred", 40)
+    await seedAt("new-processed", "processed", 1)
+
+    expect(await printful.pruneWebhookEvents(cutoff(), 0)).toBe(2)
+    expect(await remaining()).toEqual([
+      "prune-new-processed",
+      "prune-old-deferred",
+      "prune-old-failed",
+      "prune-old-received",
+    ])
+  })
+
+  it("keeps the newest rows the health panel reads, however old", async () => {
+    // A store that went quiet: every row is past the cutoff. Without the
+    // window the panel would read "nothing ever received".
+    await seedAt("a", "processed", 50)
+    await seedAt("b", "processed", 45)
+    await seedAt("c", "ignored", 40)
+
+    expect(await printful.pruneWebhookEvents(cutoff(), 2)).toBe(1)
+    expect(await remaining()).toEqual(["prune-b", "prune-c"])
+  })
+})
+
+describe("a failed create is recorded for the order sweep", () => {
+  /**
+   * Order creation is triggered once, by payment.captured. Before this, an
+   * attempt that failed with no claim behind it — here, the Order module
+   * throwing before the claim is written — left only a log line, and the
+   * sweep, which reads claims, never saw the order again.
+   */
+  async function linkRow(orderId: string) {
+    const rows = await pg.raw(
+      `select printful_order_id, status, error_message, attempts, last_attempt_at
+         from printful_order_link where medusa_order_id = ?`,
+      [orderId]
+    )
+    return rows.rows as Array<{
+      printful_order_id: string
+      status: string
+      error_message: string | null
+      attempts: number
+      last_attempt_at: Date | null
+    }>
+  }
+
+  afterEach(() => {
+    ;(printful as unknown as { client_: PrintfulClient | null }).client_ = null
+  })
+
+  it("leaves a failed claim behind when the attempt fails before claiming", async () => {
+    await expect(
+      createPrintfulOrderWorkflow(makeWorkflowContainer()).run({
+        input: { order_id: "order_lost_1" },
+      })
+    ).rejects.toThrow(/Order module used unexpectedly/)
+
+    const rows = await linkRow("order_lost_1")
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({
+      printful_order_id: PENDING_PRINTFUL_ORDER_ID,
+      status: "failed",
+      attempts: 1,
+    })
+    expect(rows[0].error_message).toMatch(/Order module used unexpectedly/)
+    expect(rows[0].last_attempt_at).not.toBeNull()
+  })
+
+  it("waits out the backoff instead of repeating the failure at once", async () => {
+    await expect(
+      createPrintfulOrderWorkflow(makeWorkflowContainer()).run({
+        input: { order_id: "order_lost_2" },
+      })
+    ).rejects.toThrow()
+
+    // A second trigger moments later — a duplicate event, or the sweep.
+    const { result } = await createPrintfulOrderWorkflow(
+      makeWorkflowContainer()
+    ).run({ input: { order_id: "order_lost_2" } })
+
+    expect(result).toMatchObject({ skipped: true, reason: "retry_scheduled" })
+    expect((await linkRow("order_lost_2"))[0].attempts).toBe(1)
+  })
+
+  it("settles a due failure through the lookup, and counts the next failure", async () => {
+    await printful.createPrintfulOrderLinks({
+      medusa_order_id: "order_lost_3",
+      printful_order_id: PENDING_PRINTFUL_ORDER_ID,
+      external_id: "order_lost_3",
+      status: "failed",
+      error_message: "earlier failure",
+      last_attempt_at: new Date(Date.now() - 24 * 60 * 60 * 1000),
+      attempts: 2,
+    })
+
+    // Printful has no order under this external_id.
+    const requested: string[] = []
+    ;(printful as unknown as { client_: PrintfulClient | null }).client_ =
+      new PrintfulClient({
+        apiToken: "test-token",
+        storeId: "test-store",
+        fetchImpl: (async (url: string | URL) => {
+          requested.push(String(url))
+          return new Response(
+            JSON.stringify({
+              code: 404,
+              error: { reason: "NotFound", message: "Not found" },
+            }),
+            { status: 404, headers: { "Content-Type": "application/json" } }
+          )
+        }) as unknown as typeof fetch,
+      })
+
+    await expect(
+      createPrintfulOrderWorkflow(makeWorkflowContainer()).run({
+        input: { order_id: "order_lost_3" },
+      })
+    ).rejects.toThrow(/Order module used unexpectedly/)
+
+    // It asked Printful before creating anything — never a blind second POST.
+    expect(requested).toHaveLength(1)
+    expect(requested[0]).toContain("order_lost_3")
+
+    const rows = await linkRow("order_lost_3")
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ status: "failed", attempts: 3 })
+    expect(rows[0].error_message).toMatch(/Order module used unexpectedly/)
+  })
+})
+
+describe("recordFailedOrderAttempt", () => {
+  async function seedLink(fields: Record<string, unknown>) {
+    return (await printful.createPrintfulOrderLinks({
+      medusa_order_id: "order_rec",
+      external_id: "order_rec",
+      printful_order_id: PENDING_PRINTFUL_ORDER_ID,
+      ...fields,
+    })) as { id: string }
+  }
+
+  async function readLink() {
+    return (await printful.findOrderLink("order_rec")) as Record<
+      string,
+      unknown
+    >
+  }
+
+  it("marks a claim the attempt left behind as failed", async () => {
+    await seedLink({ status: "pending" })
+    await printful.recordFailedOrderAttempt({
+      medusa_order_id: "order_rec",
+      attempts: 4,
+      error_message: "boom",
+    })
+    expect(await readLink()).toMatchObject({
+      status: "failed",
+      error_message: "boom",
+      attempts: 4,
+    })
+    expect((await readLink()).last_attempt_at).toBeTruthy()
+  })
+
+  it("keeps the reason a held claim already carries", async () => {
+    await seedLink({
+      status: "unverified",
+      error_message: "create outcome unknown (timeout)",
+      last_attempt_at: new Date(Date.now() - 60_000),
+    })
+    await printful.recordFailedOrderAttempt({
+      medusa_order_id: "order_rec",
+      attempts: 2,
+      error_message: "boom",
+    })
+    expect(await readLink()).toMatchObject({
+      status: "unverified",
+      error_message: "create outcome unknown (timeout)",
+      attempts: 2,
+    })
+  })
+
+  it("leaves a link to a real Printful order alone", async () => {
+    await seedLink({ printful_order_id: "77", status: "pending" })
+    await printful.recordFailedOrderAttempt({
+      medusa_order_id: "order_rec",
+      attempts: 1,
+      error_message: "boom",
+    })
+    expect(await readLink()).toMatchObject({
+      printful_order_id: "77",
+      status: "pending",
+      error_message: null,
+      attempts: 0,
+    })
   })
 })
 

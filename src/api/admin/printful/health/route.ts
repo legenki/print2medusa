@@ -3,23 +3,9 @@ import { PRINTFUL_MODULE } from "../../../../modules/printful"
 import type PrintfulModuleService from "../../../../modules/printful/service"
 import {
   summarizeWebhookHealth,
+  WEBHOOK_HEALTH_WINDOW,
   type WebhookHealthRow,
 } from "../../../../utils/webhook-health"
-
-/**
- * Rows the summary is computed over: the most recent slice of the event table.
- *
- * Deliberately a window rather than the whole table. This is a health panel —
- * "are deliveries arriving and are they landing" — and the answer lives in
- * recent traffic. Reading every row ever received would grow unbounded with
- * store age and make the page slower the longer the plugin has been installed,
- * for an answer that gets less useful the further back it reaches.
- *
- * The counts are therefore explicitly counts within this window, and the
- * response says so via `window`, so the page cannot present them as all-time
- * totals.
- */
-const HEALTH_WINDOW = 200
 
 /**
  * Webhook delivery health.
@@ -42,7 +28,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
 
   const rows = (await printful.listPrintfulWebhookEvents(
     {},
-    { take: HEALTH_WINDOW, order: { created_at: "DESC" } }
+    { take: WEBHOOK_HEALTH_WINDOW, order: { created_at: "DESC" } }
   )) as WebhookHealthRow[]
 
   const summary = summarizeWebhookHealth(rows, {
@@ -51,6 +37,6 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
 
   res.status(200).json({
     ...summary,
-    window: HEALTH_WINDOW,
+    window: WEBHOOK_HEALTH_WINDOW,
   })
 }

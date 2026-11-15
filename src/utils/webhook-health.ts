@@ -1,4 +1,21 @@
 /**
+ * Rows the health summary is computed over: the most recent slice of the event
+ * table.
+ *
+ * Deliberately a window rather than the whole table. This is a health panel —
+ * "are deliveries arriving and are they landing" — and the answer lives in
+ * recent traffic. Reading every row ever received would grow unbounded with
+ * store age and make the page slower the longer the plugin has been installed,
+ * for an answer that gets less useful the further back it reaches. The counts
+ * are therefore counts within this window, and the route says so via `window`,
+ * so the page cannot present them as all-time totals.
+ *
+ * pruneWebhookEvents never removes these rows, so the panel cannot lose the
+ * last delivery to the retention job.
+ */
+export const WEBHOOK_HEALTH_WINDOW = 200
+
+/**
  * The subset of a `printful_webhook_event` row the health summary reads.
  *
  * Deliberately narrow: the summary must be testable against plain objects,

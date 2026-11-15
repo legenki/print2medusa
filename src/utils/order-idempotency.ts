@@ -92,29 +92,64 @@ export function isUnresolvedLink(
  */
 export const CLAIM_IN_FLIGHT_MS = 10 * 60 * 1000
 
+/** Wait after the first failed attempt before the sweep tries again. */
+export const CLAIM_RETRY_BASE_MS = 10 * 60 * 1000
+
+/** Longest wait between attempts, however many have failed. */
+export const CLAIM_RETRY_MAX_MS = 2 * 60 * 60 * 1000
+
+/**
+ * How long to wait after the `attempts`-th failed attempt: doubling from
+ * CLAIM_RETRY_BASE_MS, capped at CLAIM_RETRY_MAX_MS.
+ *
+ * A transient failure clears on the first retry or two. One that does not is
+ * usually something a person must fix — an address Printful rejects, a
+ * variant it no longer stocks — and the cap keeps such an order retrying, and
+ * logging, a dozen times a day rather than on every 15-minute sweep. It is
+ * never given up on: once the cause is fixed, the next retry sends it.
+ */
+export function claimRetryDelayMs(attempts: number): number {
+  const n = Number.isFinite(attempts) ? Math.max(1, Math.floor(attempts)) : 1
+  // Past 2^5 the cap has long applied; stopping there keeps the power finite.
+  return Math.min(
+    CLAIM_RETRY_MAX_MS,
+    CLAIM_RETRY_BASE_MS * 2 ** Math.min(n - 1, 5)
+  )
+}
+
 export type PendingClaimState =
   /** A create may be running right now; leave the claim alone. */
   | "in_flight"
+  /** An attempt failed recently; wait out its backoff before the next. */
+  | "backoff"
   /** No create can still own this claim; ask Printful what became of it. */
   | "settle"
 
 /**
  * Decide whether an unresolved claim may be reconciled now.
  *
- * `last_attempt_at` is stamped only when an attempt ended without an answer,
- * so its presence alone proves no create still holds the claim. Without it,
- * age is the only evidence — and an unreadable timestamp is treated as old,
- * because a claim nothing can ever settle is worse than one settled late.
+ * `last_attempt_at` is stamped only when an attempt ended — failed, or without
+ * an answer — so its presence alone proves no create still holds the claim.
+ * It is then due once the backoff for its `attempts` has passed. Without it,
+ * age is the only evidence. An unreadable timestamp is treated as due,
+ * because a claim nothing can ever settle is worse than one settled early.
  */
 export function classifyPendingClaim(
   link: {
     created_at?: Date | string | null
     last_attempt_at?: Date | string | null
+    attempts?: number | null
   },
   now: number = Date.now()
 ): PendingClaimState {
   if (link.last_attempt_at) {
-    return "settle"
+    const last = new Date(link.last_attempt_at).getTime()
+    if (!Number.isFinite(last)) {
+      return "settle"
+    }
+    return now - last < claimRetryDelayMs(link.attempts ?? 0)
+      ? "backoff"
+      : "settle"
   }
   const created = link.created_at ? new Date(link.created_at).getTime() : NaN
   if (!Number.isFinite(created)) {

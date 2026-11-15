@@ -40,24 +40,33 @@ export async function runAllMigrations(pg: {
   ok(files.length > 0, `No migrations found in ${MIGRATIONS_DIR}`)
 
   for (const file of files) {
-    const name = file.replace(/\.ts$/, "")
-    const mod = (await import(join(MIGRATIONS_DIR, file))) as Record<
-      string,
-      { prototype: MigrationInstance }
-    >
-    const MigrationClass = mod[name]
-    ok(MigrationClass, `${file} does not export a class named ${name}`)
+    await runMigration(pg, file.replace(/\.ts$/, ""))
+  }
+}
 
-    const statements: string[] = []
-    const migration = Object.create(
-      MigrationClass.prototype
-    ) as MigrationInstance
-    migration.addSql = (sql: string) => {
-      statements.push(sql)
-    }
-    await migration.up()
-    for (const sql of statements) {
-      await pg.raw(sql)
-    }
+/**
+ * Apply one migration by class name. For tests that need rows in place
+ * before a migration runs — a data migration is only proven against data
+ * written in the shape it replaces.
+ */
+export async function runMigration(
+  pg: { raw: (sql: string) => PromiseLike<unknown> },
+  name: string
+): Promise<void> {
+  const mod = (await import(join(MIGRATIONS_DIR, `${name}.ts`))) as Record<
+    string,
+    { prototype: MigrationInstance }
+  >
+  const MigrationClass = mod[name]
+  ok(MigrationClass, `${name}.ts does not export a class named ${name}`)
+
+  const statements: string[] = []
+  const migration = Object.create(MigrationClass.prototype) as MigrationInstance
+  migration.addSql = (sql: string) => {
+    statements.push(sql)
+  }
+  await migration.up()
+  for (const sql of statements) {
+    await pg.raw(sql)
   }
 }

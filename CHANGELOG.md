@@ -1,5 +1,55 @@
 # Changelog
 
+## Unreleased
+
+### Security
+
+- **Webhook events no longer keep the customer's details.** Each event used
+  to be stored with Printful's whole body, which carries the order's
+  recipient — name, address, email, phone — and nothing ever read it back.
+  The event row now keeps only the delivery envelope (`type`, `created`,
+  `retries`, `store`); the ids the workflow needs were already columns of
+  their own. Migration `Migration20261115000000` reduces rows stored by
+  earlier releases the same way.
+- **Medusa dev dependencies 2.21.1 → 2.22.7** (and `@medusajs/ui` 4.2.14).
+  This clears every critical and high advisory `npm audit` reported, all of
+  them in Medusa's own dependencies: `proxy-addr` (critical),
+  `@graphql-tools/utils`, `lodash`, `follow-redirects`, `body-parser`,
+  `multer`, `compression`, `zod`, `brace-expansion`, `source-map-js`. 19 low
+  and moderate remain, in versions Medusa itself pins (`express` 4.22.2 and
+  its `qs`, `bullmq`, `uuid`, SendGrid) or in the lint toolchain. The
+  plugin has no runtime dependencies, so this protects development and CI;
+  the README now recommends stores run Medusa 2.22.7 or later.
+
+### Fixed
+
+- **A paid order that failed to reach Printful was never retried.** Order
+  creation runs once, on `payment.captured`. An attempt that failed before
+  claiming the order — a database error, items with no Printful variant, no
+  shipping address — or one Printful refused outright left only a log line,
+  and the `printful-retry-orders` sweep, which reads claims, never saw the
+  order again. Every failed attempt now leaves a claim marked `failed` with
+  the reason; the sweep retries it after 10 minutes, doubling to at most
+  every 2 hours, and never gives up. A retry looks the order up by
+  `external_id` first, so it cannot create a duplicate. The order page shows
+  the reason and the time of the last attempt while the order has no
+  Printful order. New column `printful_order_link.attempts`
+  (`Migration20261115000100`).
+
+### Added
+
+- **`printful-prune-webhook-events`**, a daily job deleting settled webhook
+  events (`processed`, `ignored`) older than 30 days. In-flight and failed
+  events stay, and so do the newest 200, which the webhook health panel reads.
+
+### Changed
+
+- `engines.node` is `^20.19.0 || >=22.12.0`, matching the Medusa releases the
+  plugin supports, instead of `>=20`. Developing the plugin needs Node 22.22+,
+  which Medusa 2.22 requires.
+
+Run `npx medusa db:migrate` after upgrading: two migrations.
+
 ## 0.11.4
 
 No change to the plugin's own code. The first release published through npm

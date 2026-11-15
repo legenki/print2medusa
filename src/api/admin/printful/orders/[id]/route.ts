@@ -12,15 +12,22 @@ import { printfulOrderIdFrom } from "../../../../../utils/order-metadata"
  * link row is written only by this plugin, after Printful created the order.
  *
  * A claim still holding the `pending` sentinel answers null — no Printful
- * order exists for it yet.
+ * order exists for it yet. When an attempt to create one failed, the answer
+ * also says why and when, so the order page can show a stalled order instead
+ * of nothing at all.
  */
 export async function GET(req: MedusaRequest, res: MedusaResponse) {
   const printful: PrintfulModuleService = req.scope.resolve(PRINTFUL_MODULE)
 
   const link = await printful.findOrderLink(req.params.id)
+  const printfulOrderId = printfulOrderIdFrom(link)
 
   res.status(200).json({
-    printful_order_id: printfulOrderIdFrom(link),
+    printful_order_id: printfulOrderId,
     status: link?.status ?? null,
+    // Only while no Printful order exists: once one does, these describe an
+    // attempt that no longer matters.
+    error_message: printfulOrderId ? null : (link?.error_message ?? null),
+    last_attempt_at: printfulOrderId ? null : (link?.last_attempt_at ?? null),
   })
 }

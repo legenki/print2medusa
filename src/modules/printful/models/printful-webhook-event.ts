@@ -6,6 +6,8 @@ const PrintfulWebhookEvent = model.define("printful_webhook_event", {
   type: model.text(),
   printful_order_id: model.text(),
   printful_shipment_id: model.text().nullable(),
+  // The delivery envelope only (type, created, retries, store) — never the
+  // order, which carries the recipient's details. See webhookEnvelope.
   payload: model.json(),
   status: model.text().default("received"),
   attempts: model.number().default(0),

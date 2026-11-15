@@ -18,6 +18,11 @@ const PrintfulOrderLink = model.define("printful_order_link", {
   error_message: model.text().nullable(),
   /** When that unresolved attempt happened, so a stalled row is findable. */
   last_attempt_at: model.dateTime().nullable(),
+  /**
+   * Failed create attempts in a row while no Printful order exists. Drives
+   * the order sweep's backoff — see claimRetryDelayMs.
+   */
+  attempts: model.number().default(0),
 })
 
 export default PrintfulOrderLink

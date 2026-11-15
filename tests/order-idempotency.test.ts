@@ -3,6 +3,9 @@ import { PrintfulApiError } from "../src/utils/errors"
 import {
   assertUsableExternalId,
   CLAIM_IN_FLIGHT_MS,
+  CLAIM_RETRY_BASE_MS,
+  CLAIM_RETRY_MAX_MS,
+  claimRetryDelayMs,
   classifyCreateFailure,
   classifyPendingClaim,
   isUnresolvedLink,
@@ -137,13 +140,54 @@ describe("classifyPendingClaim", () => {
     ).toBe("settle")
   })
 
-  it("settles a claim an earlier attempt marked unverified, however fresh", () => {
+  it("waits out the backoff after an attempt ended, however old the claim", () => {
+    // An attempt that ended — failed, or held without an answer — proves no
+    // create still owns the claim, but trying again at once would only repeat
+    // the failure.
+    expect(
+      classifyPendingClaim(
+        {
+          created_at: new Date(now - 24 * 60 * 60 * 1000),
+          last_attempt_at: new Date(now - 500),
+          attempts: 1,
+        },
+        now
+      )
+    ).toBe("backoff")
+  })
+
+  it("settles once the backoff has passed", () => {
     expect(
       classifyPendingClaim(
         {
           created_at: new Date(now - 1_000),
-          last_attempt_at: new Date(now - 500),
+          last_attempt_at: new Date(now - CLAIM_RETRY_BASE_MS),
+          attempts: 1,
         },
+        now
+      )
+    ).toBe("settle")
+  })
+
+  it("waits longer the more attempts have failed", () => {
+    const link = (sinceLast: number) => ({
+      created_at: new Date(now - 24 * 60 * 60 * 1000),
+      last_attempt_at: new Date(now - sinceLast),
+      attempts: 3,
+    })
+    expect(classifyPendingClaim(link(2 * CLAIM_RETRY_BASE_MS), now)).toBe(
+      "backoff"
+    )
+    expect(classifyPendingClaim(link(4 * CLAIM_RETRY_BASE_MS), now)).toBe(
+      "settle"
+    )
+  })
+
+  it("treats a claim from before attempts were counted as one attempt", () => {
+    // Rows written before the column existed read 0: the shortest wait.
+    expect(
+      classifyPendingClaim(
+        { last_attempt_at: new Date(now - CLAIM_RETRY_BASE_MS) },
         now
       )
     ).toBe("settle")
@@ -152,5 +196,27 @@ describe("classifyPendingClaim", () => {
   it("settles rather than strands a claim with no readable timestamp", () => {
     expect(classifyPendingClaim({}, now)).toBe("settle")
     expect(classifyPendingClaim({ created_at: "garbage" }, now)).toBe("settle")
+    expect(classifyPendingClaim({ last_attempt_at: "garbage" }, now)).toBe(
+      "settle"
+    )
+  })
+})
+
+describe("claimRetryDelayMs", () => {
+  it("doubles from the base with each failed attempt", () => {
+    expect(claimRetryDelayMs(1)).toBe(CLAIM_RETRY_BASE_MS)
+    expect(claimRetryDelayMs(2)).toBe(2 * CLAIM_RETRY_BASE_MS)
+    expect(claimRetryDelayMs(3)).toBe(4 * CLAIM_RETRY_BASE_MS)
+  })
+
+  it("never waits longer than the cap, and never gives up", () => {
+    expect(claimRetryDelayMs(10)).toBe(CLAIM_RETRY_MAX_MS)
+    expect(claimRetryDelayMs(10_000)).toBe(CLAIM_RETRY_MAX_MS)
+  })
+
+  it("reads a missing or nonsense count as the first attempt", () => {
+    for (const attempts of [0, -3, Number.NaN, 1.7]) {
+      expect(claimRetryDelayMs(attempts)).toBe(CLAIM_RETRY_BASE_MS)
+    }
   })
 })

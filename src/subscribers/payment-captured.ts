@@ -7,6 +7,12 @@ import createPrintfulOrderWorkflow from "../workflows/create-printful-order"
  * Primary path: create Printful order when payment is captured.
  * Event payload is `{ id: payment_id }` — resolve order via payment collection.
  * Idempotent via PrintfulOrderLink.
+ *
+ * Errors are only logged here because the workflow already made them
+ * durable: a failed attempt leaves a claim the order sweep retries (see
+ * recordFailedOrderAttempt). The one failure nothing records is not finding
+ * the order for the payment at all — with no order id there is nothing to
+ * attach a record to.
  */
 export default async function paymentCapturedHandler({
   event: { data },
