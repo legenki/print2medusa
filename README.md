@@ -546,8 +546,9 @@ and which member is unavailable when one is.
 ## Local plugin development
 
 Developing the plugin needs Node **22.22+**, which the Medusa 2.22 dev
-dependencies require; stores using it can still run older Node with older
-Medusa.
+dependencies require, and **npm 11** — `packageManager` pins 11.17.0. The npm
+10 that Node 22 ships rejects the lockfile in `npm ci`. Stores using the
+plugin can still run older Node with older Medusa.
 
 ```bash
 npm install

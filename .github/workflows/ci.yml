@@ -31,6 +31,13 @@ jobs:
         with:
           node-version: "22"
           cache: npm
+      # The npm `packageManager` pins, as the Publish workflow uses. Node 22
+      # ships npm 10, which resolves peer dependencies differently from the
+      # npm 11 that writes the lockfile: Medusa 2.22's cva peer
+      # (typescript >= 6) makes npm 10 reject it in `npm ci`. CI has to check
+      # with the npm a release is built with.
+      - name: Install the pinned npm
+        run: npm install -g "$(node -p "require('./package.json').packageManager")"
       - run: npm ci
       - run: npm run format:check
       - run: npm run lint
