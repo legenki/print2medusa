@@ -1,6 +1,11 @@
 # Changelog
 
-## Unreleased
+## 0.12.0
+
+Two fixes worth upgrading for: a paid order that failed to reach Printful is
+now retried instead of dropped, and webhook events no longer keep the
+customer's address. Run `npx medusa db:migrate` after upgrading — two
+migrations.
 
 ### Security
 
@@ -47,8 +52,13 @@
 - `engines.node` is `^20.19.0 || >=22.12.0`, matching the Medusa releases the
   plugin supports, instead of `>=20`. Developing the plugin needs Node 22.22+,
   which Medusa 2.22 requires.
+- CI installs the npm `packageManager` pins (11.17.0) before `npm ci`, as
+  the Publish workflow already did. The npm 10 that Node 22 ships rejects
+  the lockfile over a peer dependency in Medusa 2.22's admin UI.
 
-Run `npx medusa db:migrate` after upgrading: two migrations.
+Verified: typecheck (source and tests), 615 unit tests, 43 integration tests
+against a freshly created Postgres database, lint (0 errors, 13 warnings from
+pre-existing rules), format and the build all pass, locally and in CI.
 
 ## 0.11.4
 

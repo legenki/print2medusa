@@ -5,7 +5,7 @@ From catalog sync to a complete Printful backend.
 Each release closes one coherent Printful capability and leaves the plugin in a
 working state. The testing strategy tightens as the API surface grows.
 
-Twenty-three releases on npm so far, `0.1.0` through `0.11.3`. Six of them —
+Twenty-five releases on npm so far, `0.1.0` through `0.12.0`. Six of them —
 `0.5.1`, `0.5.2`, `0.5.3`, `0.9.3`, `0.9.4` and `0.9.5` — exist because a
 defect was found in shipped code, and `0.10.0` is a release of fixes from a
 full review; what they fixed is recorded in `CHANGELOG.md` rather than quietly
@@ -16,10 +16,10 @@ so `0.11.3` is the first release carrying its changes.
 
 |                   |                                                                      |
 | ----------------- | -------------------------------------------------------------------- |
-| Published version | `0.11.3`                                                             |
+| Published version | `0.12.0`                                                             |
 | Tests             | unit (`npm test`) + integration (`test:integration`, needs Postgres) |
 | Printful API used | store products, catalog, orders, shipping rates, webhooks, reports   |
-| Peer range        | `@medusajs/*` `^2.18.0` (tested against 2.21.1)                      |
+| Peer range        | `@medusajs/*` `^2.18.0` (tested against 2.22.7)                      |
 
 The plugin covers products, prices in additional currencies, orders, order
 cancellation and recovery, webhook configuration, order status, live shipping
@@ -259,8 +259,8 @@ whatever was on disk rather than from a checkout known to pass.
 - The workflow refuses a tag that disagrees with `package.json`, and refuses a
   version already on npm
 - `--provenance`, so npm records the repository, commit and workflow
-- On `main` after `0.11.3`: the workflow authenticates through npm trusted
-  publishing instead of an `NPM_TOKEN` secret
+- Since `0.11.4`: the workflow authenticates through npm trusted publishing
+  instead of an `NPM_TOKEN` secret
 
 ---
 
@@ -378,6 +378,19 @@ Ships the changes tagged as `0.11.2`, which never reached npm.
 - **`createOnOrderPlaced`** acts only on fully captured orders
 - **Testing:** the integration suites apply every shipped migration from the
   directory instead of a hand-kept list, which had hidden a missing column
+
+---
+
+## 0.12.0 — No lost orders, no stored addresses `shipped`
+
+- **A paid order that fails to reach Printful is retried.** Any failed
+  attempt leaves a claim the order sweep retries with a per-order backoff
+  (10 minutes, doubling to 2 hours, never giving up); the order page shows
+  why it has not gone out yet
+- **Webhook events keep no customer data** — only their delivery envelope —
+  and settled ones are deleted after 30 days
+- **Medusa 2.22.7** for development and CI, clearing every critical and high
+  `npm audit` advisory
 
 ---
 
